@@ -4,89 +4,76 @@ from glob import glob
 
 from tqdm import tqdm
 
+from input_pipeline import ImagePipeline, NpyPipeline
 from module import *
 from utils import *
-
-CONFIG_PATH = 'config.json'
 
 
 class Model(object):
     def __init__(self, sess, args):
         self.sess = sess
-        config = json.load(open(CONFIG_PATH))
-        self.model_params = config['model_params']
-        self.input_params = config['input_params']
-        self.dir_params = config['dir_params']
 
         # model setting
         self.gpu_num = args.gpu_num
         self.GLOBAL_BATCH_SIZE = args.global_batch_size
         assert self.GLOBAL_BATCH_SIZE % self.gpu_num == 0
-        self.BATCH_SIZE_PER_GPU = self.GLOBAL_BATCH_SIZE // self.gpu_num
-        self.g_dim = self.model_params['g_dim']
-        self.d_dim = self.model_params['d_dim']
-        self.L1_lambda = self.model_params['L1_lambda']
-        self.beta1 = self.model_params['beta1']
-        self.lr = self.model_params['lr']
-        self.epoch = self.model_params['epoch']
-        self.epoch_step = self.model_params['epoch_step']
+        self.epoch = args.epoch
+        self.lr_decay_epoch = args.lr_decay_epoch
+        self.lr = args.lr
+        self.hidden_dim = args.hidden_dim
+        self.L1_lambda = args.L1_lambda
+        self.beta1 = args.hidden_dim
 
         # input setting
-        self.dataset_name = self.input_params['dataset_name']
-        self.image_size = self.input_params['image_size']
-        self.input_c_dim = self.input_params['input_c_dim']
-        self.output_c_dim = self.input_params['output_c_dim']
-
-        self.options = {'g_dim': self.g_dim, 'd_dim': self.d_dim,
-                        'input_c_dim': self.input_c_dim, 'output_c_dim': self.output_c_dim}
+        self.image_size = args.image_size
+        self.B_range = args.B_range
 
         # network setting
-        self.generator = generator_resnet
-        self.discriminator = discriminator
+        self.G_A2B = generator_resnet(name='generatorA2B')
+        self.G_B2A = generator_resnet(name='generatorB2A')
+        self.D_A = discriminator(name='discriminatorA', hidden_dim=self.hidden_dim)
+        self.D_B = discriminator(name='discriminatorB', hidden_dim=self.hidden_dim)
         self.criterionGAN = mae_criterion
 
         # directory setting
-        self.dataset_dir = os.path.join(self.dir_params['dataset_dir'], self.dataset_name)
-        self.sample_dir = os.path.join(self.dir_params['sample_dir'], args.sub_dir)
-        self.test_dir = os.path.join(self.dir_params['test_dir'], args.sub_dir)
-        self.log_dir = os.path.join(self.dir_params['log_dir'], args.sub_dir)
-        self.checkpoint_dir = os.path.join(self.dir_params['checkpoint_dir'], args.sub_dir)
-        if not os.path.exists(self.sample_dir):
-            os.makedirs(self.sample_dir)
-        if not os.path.exists(self.test_dir):
-            os.makedirs(self.test_dir)
-        if not os.path.exists(self.log_dir):
-            os.makedirs(self.log_dir)
-        if not os.path.exists(self.checkpoint_dir):
-            os.makedirs(self.checkpoint_dir)
+        self.dataset_dir = args.dataset_dir
+        self.datasetA = args.datasetA
+        self.datasetB = args.datasetB
+        if args.sub_dir is None:
+            self.sub_dir = self.datasetB + '2' + self.datasetA
+        else:
+            self.sub_dir = args.sub_dir
+        assert os.path.exists(self.dataset_dir), "not exists {}".format(self.dataset_dir)
+        self.sample_dir = os.path.join('./sample', args.sub_dir)
+        self.result_dir = os.path.join('./result', args.sub_dir)
+        self.log_dir = os.path.join('./log', args.sub_dir)
+        self.checkpoint_dir = os.path.join('./checkpoint', args.sub_dir)
+        for dir_path in [self.sample_dir, self.result_dir, self.log_dir, self.checkpoint_dir]:
+            makedirs(dir_path=dir_path)
+
+        # sample data
+        self.sample_A, self.sample_B = self.get_sample_data()
 
         # initialize graph
         self._build_model()
         self.saver = tf.train.Saver()
-        self.writer = tf.summary.FileWriter('{}'.format(self.log_dir), self.sess.graph)
+        self.writer = tf.summary.FileWriter(self.log_dir, self.sess.graph)
+
+        # initialize variables
+        init_op = tf.global_variables_initializer()
+        self.sess.run(init_op)
 
     def _build_model(self):
         # placeholder
-        self.real_A = tf.placeholder(tf.float32,
-                                     [self.GLOBAL_BATCH_SIZE, self.image_size,
-                                      self.image_size, self.input_c_dim],
-                                     name="real_A")
-        self.real_B = tf.placeholder(tf.float32,
-                                     [self.GLOBAL_BATCH_SIZE, self.image_size,
-                                      self.image_size, self.input_c_dim],
-                                     name="real_B")
+        self.real_img_A = tf.placeholder(tf.float32,
+                                         [self.GLOBAL_BATCH_SIZE, self.image_size, self.image_size, 3],
+                                         name="real_img_A")
+        self.real_feat_B = tf.placeholder(tf.float32,
+                                          [self.GLOBAL_BATCH_SIZE, 32, 32, 128],
+                                          name="real_feat_B")
         # divide real images
-        self.real_A_per_gpu = tf.split(self.real_A, self.gpu_num)
-        self.real_B_per_gpu = tf.split(self.real_B, self.gpu_num)
-
-        self.fake_A_sample = tf.placeholder(tf.float32,
-                                            [self.gpu_num, self.BATCH_SIZE_PER_GPU, self.image_size,
-                                             self.image_size, self.input_c_dim],
-                                            name="fake_sample")
-        self.fake_B_sample = tf.placeholder(tf.float32,
-                                            [self.gpu_num, self.BATCH_SIZE_PER_GPU, self.image_size,
-                                             self.image_size, self.input_c_dim],
-                                            name="fake_sample")
+        self.real_img_A_per_gpu = tf.split(self.real_img_A, self.gpu_num)
+        self.real_feat_B_per_gpu = tf.split(self.real_feat_B, self.gpu_num)
 
         self.g_losses = []
         self.d_losses = []
@@ -95,134 +82,124 @@ class Model(object):
         for gpu_id in range(int(self.gpu_num)):
             reuse = (gpu_id > 0)
             with tf.device(tf.DeviceSpec(device_type="GPU", device_index=gpu_id)):
-                with tf.variable_scope(tf.get_variable_scope(), reuse=reuse):
-                    # related to generator update
-                    # A > B > A
-                    self.fake_B = self.generator(self.real_A_per_gpu[gpu_id], self.options,
-                                                 reuse=reuse, name="generatorA2B")
-                    self.fake_A_return = self.generator(self.fake_B, self.options,
-                                                        reuse=reuse, name="generatorB2A")
-                    # B > A > B
-                    self.fake_A = self.generator(self.real_B_per_gpu[gpu_id], self.options,
-                                                 reuse=True, name="generatorB2A")
-                    self.fake_B_return = self.generator(self.fake_A, self.options,
-                                                        reuse=True, name="generatorA2B")
+                # generator
+                # A > B > A
+                self.real_feat_A = FeatureExtractor(self.real_img_A_per_gpu[gpu_id], reuse=reuse, name='FE_A')
+                self.fake_feat_B = self.G_A2B(self.real_feat_A, reuse=reuse)
+                self.fake_feat_A_return = self.G_B2A(self.fake_feat_B, reuse=reuse)
+                tf.add_to_collection('fake_feat_B', self.fake_feat_B)
+                # B > A > B
+                self.fake_feat_A = self.G_B2A(self.real_feat_B_per_gpu[gpu_id], reuse=True)
+                self.fake_feat_B_return = self.G_A2B(self.fake_feat_A, reuse=True)
+                tf.add_to_collection('fake_feat_A', self.fake_feat_A)
 
-                    # loss for generator
-                    self.DB_fake = self.discriminator(self.fake_B, self.options,
-                                                      reuse=reuse, name="discriminatorB")
-                    self.DA_fake = self.discriminator(self.fake_A, self.options,
-                                                      reuse=reuse, name="discriminatorA")
-                    self.loss_A_cyc = self.L1_lambda * abs_criterion(self.real_A_per_gpu[gpu_id], self.fake_A_return)
-                    self.loss_B_cyc = self.L1_lambda * abs_criterion(self.real_B_per_gpu[gpu_id], self.fake_B_return)
-                    self.g_loss_per_gpu = self.criterionGAN(self.DA_fake, tf.ones_like(self.DA_fake)) \
-                                          + self.criterionGAN(self.DB_fake, tf.ones_like(self.DB_fake)) \
-                                          + self.loss_A_cyc + self.loss_B_cyc
-                    self.g_losses.append(self.g_loss_per_gpu)
+                # discriminator
+                self.DA_fake_A_score = self.D_A(self.fake_feat_A, reuse=reuse)
+                self.DA_real_A_score = self.D_A(self.real_feat_A, reuse=True)
+                self.DB_fake_B_score = self.D_B(self.fake_feat_B, reuse=reuse)
+                self.DB_real_B_score = self.D_B(self.real_feat_B_per_gpu[gpu_id], reuse=True)
 
-                    # store fake image for discriminator
-                    self.fake_A_list.append(self.fake_A)
-                    self.fake_B_list.append(self.fake_B)
+                # loss for generator
+                self.loss_A_cyc = abs_criterion(self.real_feat_A, self.fake_feat_A_return)
+                self.loss_B_cyc = abs_criterion(self.real_feat_B_per_gpu[gpu_id], self.fake_feat_B_return)
+                self.g_loss_per_gpu = self.criterionGAN(self.DA_fake_A_score, tf.ones_like(self.DA_fake_A_score)) \
+                                      + self.criterionGAN(self.DB_fake_B_score, tf.ones_like(self.DB_fake_B_score)) \
+                                      + self.L1_lambda * (self.loss_A_cyc + self.loss_B_cyc)
+                tf.add_to_collection('G_loss', self.g_loss_per_gpu)
 
-                    # related to discriminator update
-                    self.DA_real = self.discriminator(self.real_A_per_gpu[gpu_id], self.options,
-                                                      reuse=True, name="discriminatorA")
-                    self.DB_real = self.discriminator(self.real_B_per_gpu[gpu_id], self.options,
-                                                      reuse=True, name="discriminatorB")
-                    self.DA_fake_sample = self.discriminator(self.fake_A_sample[gpu_id], self.options,
-                                                             reuse=True, name="discriminatorA")
-                    self.DB_fake_sample = self.discriminator(self.fake_B_sample[gpu_id], self.options,
-                                                             reuse=True, name="discriminatorB")
+                # loss for D_A
+                self.DA_fake_A_loss = self.criterionGAN(self.DA_fake_A_score, tf.zeros_like(self.DA_fake_A_score))
+                self.DA_real_A_loss = self.criterionGAN(self.DA_real_A_score, tf.ones_like(self.DA_real_A_score))
+                self.DA_loss = self.DA_fake_A_loss + self.DA_real_A_loss
+                # loss for D_B
+                self.DB_fake_B_loss = self.criterionGAN(self.DB_fake_B_score, tf.zeros_like(self.DB_fake_B_score))
+                self.DB_real_B_loss = self.criterionGAN(self.DB_real_B_score, tf.ones_like(self.DB_real_B_score))
+                self.DB_loss = self.DB_fake_B_loss + self.DB_real_B_loss
+                # all discriminator loss
+                self.D_loss = self.DA_loss + self.DB_loss
+                tf.add_to_collection('D_loss', self.D_loss)
 
-                    # discriminatorA loss
-                    self.d_A_real_loss = self.criterionGAN(self.DA_real, tf.ones_like(self.DA_fake))
-                    self.d_A_fake_loss = self.criterionGAN(self.DA_fake_sample, tf.zeros_like(self.DA_fake_sample))
-                    self.d_A_loss = (self.d_A_real_loss + self.d_A_fake_loss) / 2.0
-                    # discriminatorB loss
-                    self.d_B_real_loss = self.criterionGAN(self.DB_real, tf.ones_like(self.DB_fake))
-                    self.d_B_fake_loss = self.criterionGAN(self.DB_fake_sample, tf.zeros_like(self.DB_fake_sample))
-                    self.d_B_loss = (self.d_B_real_loss + self.d_B_fake_loss) / 2.0
-                    # all discriminator loss
-                    self.d_loss = self.d_A_loss + self.d_B_loss
-                    self.d_losses.append(self.d_loss)
+        # output for sample
+        self.sample_feat_A = tf.get_collection('fake_feat_A')
+        self.sample_feat_B = tf.get_collection('fake_feat_B')
 
         # compute all loss over gpu
-        self.g_total_loss = tf.reduce_mean(tf.stack(self.g_losses, axis=0))
-        self.d_total_loss = tf.reduce_mean(tf.stack(self.d_losses, axis=0))
-        self.g_total_loss_sum = tf.summary.scalar("generator_loss", self.g_total_loss)
-        self.d_total_loss_sum = tf.summary.scalar("discriminator_loss", self.d_total_loss)
+        self.G_total_loss = tf.reduce_mean(tf.get_collection('G_loss'))
+        self.D_total_loss = tf.reduce_mean(tf.get_collection('D_loss'))
+        self.G_total_loss_sum = tf.summary.scalar("generator_loss", self.G_total_loss)
+        self.D_total_loss_sum = tf.summary.scalar("discriminator_loss", self.D_total_loss)
 
         # get variables
         self.t_vars = tf.trainable_variables()
-        self.g_vars = [var for var in self.t_vars if 'generator' in var.name]
+        self.g_vars = [var for var in self.t_vars if 'generator' or 'FE_A' in var.name]
         self.d_vars = [var for var in self.t_vars if 'discriminator' in var.name]
-        for var in self.t_vars:
+        for var in self.g_vars + self.d_vars:
             print(var.name)
 
         # optimizer
-        self.lr_ph = tf.placeholder(tf.float32, None, name='learning_rate')
-        self.d_optim = tf.train.AdamOptimizer(self.lr_ph, beta1=self.beta1) \
-            .minimize(self.d_total_loss, var_list=self.d_vars, colocate_gradients_with_ops=True)
-        self.g_optim = tf.train.AdamOptimizer(self.lr_ph, beta1=self.beta1) \
-            .minimize(self.g_total_loss, var_list=self.g_vars, colocate_gradients_with_ops=True)
+        self.lr_ph = tf.placeholder(tf.float32, name='learning_rate')
+        self.D_optim = tf.train.AdamOptimizer(self.lr_ph, beta1=self.beta1) \
+            .minimize(self.D_total_loss, var_list=self.d_vars, colocate_gradients_with_ops=True)
+        self.G_optim = tf.train.AdamOptimizer(self.lr_ph, beta1=self.beta1) \
+            .minimize(self.G_total_loss, var_list=self.g_vars, colocate_gradients_with_ops=True)
 
     def train(self):
-        # initialize variables
-        init_op = tf.global_variables_initializer()
-        self.sess.run(init_op)
+        A_pipeline = ImagePipeline(os.path.join(self.dataset_dir, self.datasetA),
+                                   batch_size=self.GLOBAL_BATCH_SIZE, image_size=self.image_size, shuffle=True)
+        A_init_op, A_next_el = A_pipeline.get_init_op_and_next_el()
+        B_pipeline = NpyPipeline(os.path.join(self.dataset_dir, self.datasetB),
+                                 batch_size=self.GLOBAL_BATCH_SIZE, max_range=self.B_range, shuffle=True)
+        B_init_op, B_next_el = B_pipeline.get_init_op_and_next_el()
 
-        # load train filenames
-        A_files = glob('{}/trainA/*.jpg'.format(self.dataset_dir))
-        B_files = glob('{}/trainB/*.jpg'.format(self.dataset_dir))
-        batch_idxs = min(len(A_files), len(B_files)) // self.GLOBAL_BATCH_SIZE
+        # get num of iteration
+        max_iter = min(A_pipeline.get_file_num(), B_pipeline.get_file_num()) // self.GLOBAL_BATCH_SIZE
 
         # training loop
         counter = 0
         start_time = time.time()
-        for epoch in range(self.epoch):
-            # lr decay
-            if epoch < self.epoch_step:
-                lr = np.float32(self.lr)
-            else:
-                lr = self.lr * (self.epoch - epoch) / (self.epoch - self.epoch_step)
-            np.random.shuffle(A_files)
-            np.random.shuffle(B_files)
-            with tqdm(range(batch_idxs)) as bar:
-                bar.set_description('epoch: {:>03d} '.format(epoch))
-                for idx in bar:
-                    # load images
-                    batch_A_files = A_files[idx * self.GLOBAL_BATCH_SIZE:(idx + 1) * self.GLOBAL_BATCH_SIZE]
-                    batch_B_files = B_files[idx * self.GLOBAL_BATCH_SIZE:(idx + 1) * self.GLOBAL_BATCH_SIZE]
-                    batch_A_images = [load_test_data(batch_file, self.image_size) for batch_file in batch_A_files]
-                    batch_B_images = [load_test_data(batch_file, self.image_size) for batch_file in batch_B_files]
-                    batch_A_images = np.array(batch_A_images).astype(np.float32)
-                    batch_B_images = np.array(batch_B_images).astype(np.float32)
+        with tqdm(range(self.epoch)) as bar_epoch:
+            for epoch in bar_epoch:
+                bar_epoch.set_description('epoch')
+                # lr decay
+                if epoch < self.lr_decay_epoch:
+                    lr = np.float32(self.lr)
+                else:
+                    lr = np.float32(self.lr) * (self.epoch - epoch) / (self.epoch - self.lr_decay_epoch)
 
-                    # update G
-                    fake_A_list, fake_B_list, _, g_sum = self.sess.run([self.fake_A_list, self.fake_B_list,
-                                                                        self.g_optim, self.g_total_loss_sum],
-                                                                       feed_dict={self.real_A: batch_A_images,
-                                                                                  self.real_B: batch_B_images,
-                                                                                  self.lr_ph: lr})
-                    self.writer.add_summary(g_sum, counter)
+                # initialize dataset iterator
+                self.sess.run([A_init_op, B_init_op])
 
-                    # update D
-                    _, d_sum = self.sess.run([self.d_optim, self.d_total_loss_sum],
-                                             feed_dict={self.fake_A_sample: fake_A_list,
-                                                        self.fake_B_sample: fake_B_list,
-                                                        self.real_A: batch_A_images,
-                                                        self.real_B: batch_B_images,
-                                                        self.lr_ph: lr})
-                    self.writer.add_summary(d_sum, counter)
+                with tqdm(range(max_iter), leave=False) as bar_iter:
+                    for idx in bar_iter:
+                        bar_iter.set_description('iteration')
 
-                    # save samples and checkpoints
-                    if (idx + 1) == batch_idxs:
-                        self.save_samples(epoch)
-                        self.save(self.checkpoint_dir, counter)
-                    counter += 1
+                        # load data
+                        A_image_paths, A_images = self.sess.run(A_next_el)
+                        B_filenames, B_features = self.sess.run(B_next_el)
+
+                        # update G
+                        _, G_sum = self.sess.run([self.G_optim, self.G_total_loss_sum],
+                                                 feed_dict={self.real_img_A: A_images,
+                                                            self.real_feat_B: B_features,
+                                                            self.lr_ph: lr})
+                        self.writer.add_summary(G_sum, counter)
+
+                        # update D
+                        _, D_sum = self.sess.run([self.D_optim, self.D_total_loss_sum],
+                                                 feed_dict={self.real_img_A: A_images,
+                                                            self.real_feat_B: B_features,
+                                                            self.lr_ph: lr})
+                        self.writer.add_summary(D_sum, counter)
+
+                        counter += 1
+
+                # save samples
+                if (epoch+1) % (self.epoch // 10) == 0:
+                    self.save_samples(epoch)
 
         # save model when finish training
         self.save(self.checkpoint_dir, counter)
+        self.save_config()
         print('the total time is %4.4f' % (time.time() - start_time))
 
     def test(self):
@@ -231,11 +208,28 @@ class Model(object):
         else:
             print(" [!] Load failed...")
 
-        self.save_samples(self.test_dir)
-        pass
+        # load dataset
+        A_pipeline = ImagePipeline(os.path.join(self.dataset_dir, self.datasetA),
+                                   batch_size=self.GLOBAL_BATCH_SIZE, image_size=self.image_size, shuffle=False)
+        A_init_op, A_next_el = A_pipeline.get_init_op_and_next_el()
+
+        # get num of iteration
+        max_iter = A_pipeline.get_file_num() // self.GLOBAL_BATCH_SIZE
+
+        # initialize dataset iterator
+        self.sess.run(A_init_op)
+
+        with tqdm(range(max_iter)) as bar_iter:
+            for idx in bar_iter:
+                # load data
+                A_image_paths, A_images = self.sess.run(A_next_el)
+
+                fake_B = self.sess.run(self.sample_feat_B, feed_dict={self.real_img_A: A_images})
+
+
 
     def save(self, checkpoint_dir, counter):
-        model_name = "{}.model".format(self.dataset_name)
+        model_name = "{}.ckpt".format(self.datasetB + '2' + self.datasetA)
 
         if not os.path.exists(checkpoint_dir):
             os.makedirs(checkpoint_dir)
@@ -243,6 +237,7 @@ class Model(object):
         self.saver.save(self.sess,
                         os.path.join(checkpoint_dir, model_name),
                         global_step=counter)
+
 
     def load(self, checkpoint_dir):
         print(" [*] Reading checkpoint...")
@@ -255,23 +250,66 @@ class Model(object):
         else:
             return False
 
-    def save_samples(self, epoch):
-        # load test filenames
-        A_files = glob('{}/testA/*.jpg'.format(self.dataset_dir))
-        B_files = glob('{}/testB/*.jpg'.format(self.dataset_dir))
-        # load images
-        batch_A_files = A_files[:self.GLOBAL_BATCH_SIZE]
-        batch_B_files = B_files[:self.GLOBAL_BATCH_SIZE]
-        batch_A_images = [load_test_data(batch_file, self.image_size) for batch_file in batch_A_files]
-        batch_B_images = [load_test_data(batch_file, self.image_size) for batch_file in batch_B_files]
-        batch_A_images = np.array(batch_A_images).astype(np.float32)
-        batch_B_images = np.array(batch_B_images).astype(np.float32)
-        fake_A_sample, fake_B_sample = self.sess.run([self.fake_A_list, self.fake_B_list],
-                                                     feed_dict={self.real_A: batch_A_images,
-                                                                self.real_B: batch_B_images})
-        fake_A_sample = np.concatenate(fake_A_sample, axis=0)
-        fake_B_sample = np.concatenate(fake_B_sample, axis=0)
+    def save_config(self):
+        save_dict = {
+            "gpu_num": self.gpu_num,
+            "GLOBAL_BATCH_SIZE": self.GLOBAL_BATCH_SIZE,
+            "epoch": self.epoch,
+            "lr": self.lr,
+            "hidden_dim": self.hidden_dim,
+            "L1_lambda": self.L1_lambda,
+            "beta1": self.beta1,
+            "image_size": self.image_size,
+            "B_range": self.B_range,
+            "datasetA": self.datasetA,
+            "datasetB": self.datasetB
+        }
+        json.dump(save_dict, open(os.path.join(self.result_dir, 'config.json'), 'w'))
 
-        # save images
-        save_images(batch_A_files, fake_A_sample, self.sample_dir, "B2A", epoch)
-        save_images(batch_B_files, fake_B_sample, self.sample_dir, "A2B", epoch)
+    def save_samples(self, epoch):
+        num_sample = len(self.sample_A)
+        max_iter = num_sample // self.GLOBAL_BATCH_SIZE
+        fake_A_list = []
+        fake_B_list = []
+        for idx in range(max_iter):
+            A = self.sample_A[idx*self.GLOBAL_BATCH_SIZE:(idx+1)*self.GLOBAL_BATCH_SIZE]
+            B = self.sample_B[idx*self.GLOBAL_BATCH_SIZE:(idx+1)*self.GLOBAL_BATCH_SIZE]
+            fake_A, fake_B = self.sess.run([self.sample_feat_A, self.sample_feat_B],
+                                           feed_dict={self.real_img_A: A, self.real_feat_B: B})
+            fake_A_list.append(fake_A[0])
+            fake_B_list.append(fake_B[0])
+        save_sample_npy(npy_array=fake_A_list, max_range=self.B_range,
+                        output_dir=os.path.join(self.sample_dir, "%04d" % epoch, 'fake_B2A'))
+        save_sample_npy(npy_array=fake_B_list, max_range=self.B_range,
+                        output_dir=os.path.join(self.sample_dir, "%04d" % epoch, 'fake_A2B'))
+
+    def get_sample_data(self):
+        A_pipeline = ImagePipeline(os.path.join(self.dataset_dir, self.datasetA),
+                                   batch_size=1, image_size=self.image_size, shuffle=False)
+        A_init_op, A_next_el = A_pipeline.get_init_op_and_next_el()
+        B_pipeline = NpyPipeline(os.path.join(self.dataset_dir, self.datasetB),
+                                 batch_size=1, max_range=self.B_range, shuffle=False)
+        B_init_op, B_next_el = B_pipeline.get_init_op_and_next_el()
+        self.sess.run([A_init_op, B_init_op])
+
+        num_sample = 0
+        while num_sample < 9:
+            num_sample += self.GLOBAL_BATCH_SIZE
+
+        sample_A = []
+        for idx in range(num_sample):
+            _, imageA = self.sess.run(A_next_el)
+            sample_A.append(imageA[0])
+
+        sample_B = []
+        for idx in range(num_sample):
+            _, featureB = self.sess.run(B_next_el)
+            sample_B.append(featureB[0])
+
+        del A_pipeline
+        del B_pipeline
+        save_sample_image(image_array=np.array(sample_A, dtype=np.float32),
+                          output_dir=os.path.join(self.sample_dir, "base", 'real_A'))
+        save_sample_npy(npy_array=sample_B, max_range=self.B_range,
+                        output_dir=os.path.join(self.sample_dir, "base", 'real_B'))
+        return sample_A, sample_B

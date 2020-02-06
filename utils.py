@@ -10,6 +10,29 @@ except AttributeError:
     from imageio import imread as _imread
 
 
+def makedirs(dir_path):
+    if not os.path.exists(dir_path):
+        os.makedirs(dir_path)
+
+
+def save_sample_npy(npy_array, max_range, output_dir):
+    makedirs(output_dir)
+    if len(npy_array) == 3:
+        npy_array = np.expand_dims(npy_array, axis=0)
+    for idx in range(len(npy_array)):
+        save_arr = (npy_array[idx] + 1.0) * (max_range / 2.0)
+        np.save(os.path.join(output_dir, "%04d" % idx), save_arr)
+
+
+def save_sample_image(image_array, output_dir):
+    image_array = (image_array + 1.0) * 127.5
+    makedirs(output_dir)
+    if len(image_array.shape) == 3:
+        image_array = np.expand_dims(image_array, axis=0)
+    for idx in range(len(image_array)):
+        Image.fromarray(image_array[idx].astype(np.uint8)).save(os.path.join(output_dir, "%04d.jpg" % idx))
+
+
 def load_data(file_path, image_size=256):
     img = Image.open(file_path).resize((image_size, image_size))
     image = np.asarray(img, dtype=np.float32)

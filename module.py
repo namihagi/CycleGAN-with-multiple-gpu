@@ -1,76 +1,101 @@
 import tensorflow as tf
+from tensorflow.contrib import slim
 
-from ops import deconv2d, instance_norm, lrelu, conv2d
+from ops import deconv2d, instance_norm, lrelu, conv2d, residule_block
 
 
-def generator_resnet(image, options, reuse=False, name="generator"):
+def FeatureExtractor(input, reuse, name='feature_extractor'):
+    # rapidly digested convolutional layers
+    params = {
+        'padding': 'SAME',
+        'activation_fn': lambda x: tf.nn.crelu(x, axis=3),
+        'normalizer_fn': instance_norm, 'data_format': 'NHWC'
+    }
     with tf.variable_scope(name):
         if reuse:
             tf.get_variable_scope().reuse_variables()
         else:
             assert tf.get_variable_scope().reuse is False
-
-        def residule_block(x, dim, ks=3, s=1, name='res'):
-            p = int((ks - 1) / 2)
-            y = tf.pad(x, [[0, 0], [p, p], [p, p], [0, 0]], "REFLECT")
-            y = instance_norm(conv2d(y, dim, ks, s, padding='VALID', name=name+'_c1'), name+'_bn1')
-            y = tf.pad(tf.nn.relu(y), [[0, 0], [p, p], [p, p], [0, 0]], "REFLECT")
-            y = instance_norm(conv2d(y, dim, ks, s, padding='VALID', name=name+'_c2'), name+'_bn2')
-            return y + x
-        
-        # Justin Johnson's model from https://github.com/jcjohnson/fast-neural-style/
-        # The network with 9 blocks consists of: c7s1-32, d64, d128, R128, R128, R128,
-        # R128, R128, R128, R128, R128, R128, u64, u32, c7s1-3
-        # image is 256 x 256 x input_c_dim
-        c0 = tf.pad(image, [[0, 0], [3, 3], [3, 3], [0, 0]], "REFLECT")
-        c1 = tf.nn.relu(instance_norm(conv2d(c0, options['g_dim'], 7, 1, padding='VALID', name='g_e1_c'), 'g_e1_bn'))
-        c2 = tf.nn.relu(instance_norm(conv2d(c1, options['g_dim']*2, 3, 2, name='g_e2_c'), 'g_e2_bn'))
-        c3 = tf.nn.relu(instance_norm(conv2d(c2, options['g_dim']*4, 3, 2, name='g_e3_c'), 'g_e3_bn'))
-        # define G network with 9 resnet blocks
-        r1 = residule_block(c3, options['g_dim']*4, name='g_r1')
-        r2 = residule_block(r1, options['g_dim']*4, name='g_r2')
-        r3 = residule_block(r2, options['g_dim']*4, name='g_r3')
-        r4 = residule_block(r3, options['g_dim']*4, name='g_r4')
-        r5 = residule_block(r4, options['g_dim']*4, name='g_r5')
-        r6 = residule_block(r5, options['g_dim']*4, name='g_r6')
-        r7 = residule_block(r6, options['g_dim']*4, name='g_r7')
-        r8 = residule_block(r7, options['g_dim']*4, name='g_r8')
-        r9 = residule_block(r8, options['g_dim']*4, name='g_r9')
-
-        d1 = deconv2d(r9, options['g_dim']*2, 3, 2, name='g_d1_dc')
-        d1 = tf.nn.relu(instance_norm(d1, 'g_d1_bn'))
-        d2 = deconv2d(d1, options['g_dim'], 3, 2, name='g_d2_dc')
-        d2 = tf.nn.relu(instance_norm(d2, 'g_d2_bn'))
-        d2 = tf.pad(d2, [[0, 0], [3, 3], [3, 3], [0, 0]], "REFLECT")
-        pred = tf.nn.tanh(conv2d(d2, options['output_c_dim'], 7, 1, padding='VALID', name='g_pred_c'))
-
-        return pred
+        with slim.arg_scope([slim.conv2d], **params):
+            with slim.arg_scope([slim.max_pool2d], stride=2, padding='SAME', data_format='NHWC'):
+                x = slim.conv2d(input, 24, (7, 7), stride=2, scope='conv1')
+                x = slim.max_pool2d(x, (3, 3), scope='pool1')
+                x = slim.conv2d(x, 64, (5, 5), stride=2, scope='conv2')
+                x = slim.max_pool2d(x, (3, 3), scope='pool2')
+    # output shape == (32 x 32 x 128)
+    x = tf.nn.tanh(x)
+    return tf.identity(x, name=name + '_output')
 
 
-def discriminator(image, options, reuse=False, name="discriminator"):
-    """
-    :param image: a float tensor with shape (batch_size, 32, 32, output_dim)
-    :param options: g_dim, d_dim, output_dim
-    :param reuse: whether variables reuse or not
-    :param name: name
-    """
-    with tf.variable_scope(name):
-        if reuse:
-            tf.get_variable_scope().reuse_variables()
-        else:
-            assert tf.get_variable_scope().reuse is False
+class generator_resnet:
+    def __init__(self, name="generator"):
+        self.name = name
 
-        h0 = lrelu(conv2d(image, options['d_dim'], name='d_h0_conv'))
-        # h0 is (16 x 16 x options['d_dim'])
-        h1 = lrelu(instance_norm(conv2d(h0, options['d_dim'] * 2, name='d_h1_conv'), 'd_bn1'))
-        # h1 is (8 x 8 x options['d_dim']*2)
-        h2 = lrelu(instance_norm(conv2d(h1, options['d_dim'] * 4, name='d_h2_conv'), 'd_bn2'))
-        # h2 is (4 x 4 x options['d_dim']*4)
-        h3 = lrelu(instance_norm(conv2d(h2, options['d_dim'] * 8, name='d_h3_conv'), 'd_bn3'))
-        # h3 is (2 x 2 x options['d_dim']*8)
-        h4 = conv2d(h3, 1, s=1, name='d_h3_pred')
-        # h4 is (2 x 2 x 1)
-        return h4
+    def __call__(self, input, reuse=False):
+        with tf.variable_scope(self.name):
+            if reuse:
+                tf.get_variable_scope().reuse_variables()
+            else:
+                assert tf.get_variable_scope().reuse is False
+
+            act = tf.nn.relu
+            _, h, w, c = input.shape.as_list()
+
+            # Justin Johnson's model from https://github.com/jcjohnson/fast-neural-style/
+            # The network with 9 blocks consists of: c7s1-32, d64, d128, R128, R128, R128,
+            # R128, R128, R128, R128, R128, R128, u64, u32, c7s1-3
+            # input shape == (32 x 32 x 128)
+            c1 = act(instance_norm(conv2d(input, c, 7, 1, name='g_e1_c'), 'g_e1_bn'))
+            # c1 shape == (32 x 32 x 128)
+            c2 = act(instance_norm(conv2d(c1, c * 2, 3, 2, name='g_e2_c'), 'g_e2_bn'))
+            # c2 shape == (16 x 16 x 256)
+            c3 = act(instance_norm(conv2d(c2, c * 4, 3, 2, name='g_e3_c'), 'g_e3_bn'))
+            # c3 shape == (8 x 8 x 512)
+
+            # define G network with 9 resnet blocks
+            r1 = residule_block(c3, c * 4, name='g_r1')
+            r2 = residule_block(r1, c * 4, name='g_r2')
+            r3 = residule_block(r2, c * 4, name='g_r3')
+            r4 = residule_block(r3, c * 4, name='g_r4')
+            r5 = residule_block(r4, c * 4, name='g_r5')
+            r6 = residule_block(r5, c * 4, name='g_r6')
+            r7 = residule_block(r6, c * 4, name='g_r7')
+            r8 = residule_block(r7, c * 4, name='g_r8')
+            r9 = residule_block(r8, c * 4, name='g_r9')
+
+            d1 = act(instance_norm(deconv2d(r9, c * 2, 3, 2, name='g_d1_dc'), 'g_d1_bn'))
+            # d1 shape == (16 x 16 x 256)
+            d2 = act(instance_norm(deconv2d(d1, c, 3, 2, name='g_d2_dc'), 'g_d2_bn'))
+            # d1 shape == (32 x 32 x 128)
+            output = tf.nn.tanh(deconv2d(d2, c, 7, 1, name='g_output_dc'))
+            # output shape == (32, 32, 128)
+
+            return tf.identity(output, name=self.name + '_output')
+
+
+class discriminator:
+    def __init__(self, name="discriminator", hidden_dim=64):
+        self.name = name
+        self.hidden_dim = hidden_dim
+
+    def __call__(self, feature, reuse=False):
+        with tf.variable_scope(self.name):
+            if reuse:
+                tf.get_variable_scope().reuse_variables()
+            else:
+                assert tf.get_variable_scope().reuse is False
+
+            h0 = lrelu(conv2d(feature, 64, name='d_h0_conv'))
+            # h0 is (16 x 16 x 64)
+            h1 = lrelu(instance_norm(conv2d(h0, self.hidden_dim * 2, name='d_h1_conv'), 'd_bn1'))
+            # h1 is (8 x 8 x self.hidden_dim*2)
+            h2 = lrelu(instance_norm(conv2d(h1, self.hidden_dim * 4, name='d_h2_conv'), 'd_bn2'))
+            # h2 is (4 x 4 x self.hidden_dim*4)
+            h3 = lrelu(instance_norm(conv2d(h2, self.hidden_dim * 8, s=1, name='d_h3_conv'), 'd_bn3'))
+            # h3 is (4 x 4 x self.hidden_dim*8)
+            h4 = tf.nn.sigmoid(conv2d(h3, 1, s=1, name='d_h3_pred'))
+            # h4 is (4 x 4 x 1)
+        return tf.identity(h4, name=self.name+'_output')
 
 
 def abs_criterion(in_, target):
