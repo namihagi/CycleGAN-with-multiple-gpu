@@ -65,14 +65,14 @@ class Model(object):
 
     def _build_model(self):
         # placeholder
-        self.real_img_A = tf.placeholder(tf.float32,
-                                         [self.GLOBAL_BATCH_SIZE, self.image_size, self.image_size, 3],
-                                         name="real_img_A")
+        self.real_feat_A = tf.placeholder(tf.float32,
+                                          [self.GLOBAL_BATCH_SIZE, 32, 32, 128],
+                                          name="real_img_A")
         self.real_feat_B = tf.placeholder(tf.float32,
                                           [self.GLOBAL_BATCH_SIZE, 32, 32, 128],
                                           name="real_feat_B")
         # divide real images
-        self.real_img_A_per_gpu = tf.split(self.real_img_A, self.gpu_num)
+        self.real_feat_A_per_gpu = tf.split(self.real_feat_A, self.gpu_num)
         self.real_feat_B_per_gpu = tf.split(self.real_feat_B, self.gpu_num)
 
         self.g_losses = []
@@ -84,8 +84,7 @@ class Model(object):
             with tf.device(tf.DeviceSpec(device_type="GPU", device_index=gpu_id)):
                 # generator
                 # A > B > A
-                self.real_feat_A = FeatureExtractor(self.real_img_A_per_gpu[gpu_id], reuse=reuse, name='FE_A')
-                self.fake_feat_B = self.G_A2B(self.real_feat_A, reuse=reuse)
+                self.fake_feat_B = self.G_A2B(self.real_feat_A_per_gpu[gpu_id], reuse=reuse)
                 self.fake_feat_A_return = self.G_B2A(self.fake_feat_B, reuse=reuse)
                 tf.add_to_collection('fake_feat_B', self.fake_feat_B)
                 # B > A > B
@@ -95,9 +94,33 @@ class Model(object):
 
                 # discriminator
                 self.DA_fake_A_score = self.D_A(self.fake_feat_A, reuse=reuse)
-                self.DA_real_A_score = self.D_A(self.real_feat_A, reuse=True)
+                self.DA_real_A_score = self.D_A(self.real_feat_A_per_gpu[gpu_id], reuse=True)
                 self.DB_fake_B_score = self.D_B(self.fake_feat_B, reuse=reuse)
                 self.DB_real_B_score = self.D_B(self.real_feat_B_per_gpu[gpu_id], reuse=True)
+
+                # detection model
+                with tf.variable_scope('student'):
+                    self.s_feature_extractor = FeatureExtractor(is_training=True)
+                    self.s_anchor_generator = AnchorGenerator()
+                    self.s_detector = Detector(self.s_features, self.s_images,
+                                               self.s_feature_extractor, self.s_anchor_generator)
+
+                    with tf.name_scope('student_prediction'):
+                        self.s_prediction = self.s_detector.get_predictions(
+                            score_threshold=self.model_params['score_threshold'],
+                            iou_threshold=self.model_params['iou_threshold'],
+                            max_boxes=self.model_params['max_boxes']
+                        )
+
+                    with tf.name_scope('student_supervised_loss'):
+                        s_labels = {'boxes': self.s_boxes_per_gpu[gpu_id],
+                                    'num_boxes': self.s_num_boxes_per_gpu[gpu_id]}
+                        s_losses = self.s_detector.loss(s_labels, self.model_params)
+                        self.s_localization_loss = self.localization_loss_weight * s_losses['localization_loss']
+                        self.s_classification_loss = \
+                            self.classification_loss_weight * s_losses['classification_loss']
+                        self.s_supervised_total_loss = \
+                            self.s_localization_loss + self.s_classification_loss + self.regularization_loss
 
                 # loss for generator
                 self.loss_A_cyc = abs_criterion(self.real_feat_A, self.fake_feat_A_return)
@@ -194,7 +217,7 @@ class Model(object):
                         counter += 1
 
                 # save samples
-                if (epoch+1) % (self.epoch // 10) == 0:
+                if (epoch + 1) % (self.epoch // 10) == 0:
                     self.save_samples(epoch)
 
         # save model when finish training
@@ -226,8 +249,6 @@ class Model(object):
 
                 fake_B = self.sess.run(self.sample_feat_B, feed_dict={self.real_img_A: A_images})
 
-
-
     def save(self, checkpoint_dir, counter):
         model_name = "{}.ckpt".format(self.datasetB + '2' + self.datasetA)
 
@@ -237,7 +258,6 @@ class Model(object):
         self.saver.save(self.sess,
                         os.path.join(checkpoint_dir, model_name),
                         global_step=counter)
-
 
     def load(self, checkpoint_dir):
         print(" [*] Reading checkpoint...")
@@ -272,8 +292,8 @@ class Model(object):
         fake_A_list = []
         fake_B_list = []
         for idx in range(max_iter):
-            A = self.sample_A[idx*self.GLOBAL_BATCH_SIZE:(idx+1)*self.GLOBAL_BATCH_SIZE]
-            B = self.sample_B[idx*self.GLOBAL_BATCH_SIZE:(idx+1)*self.GLOBAL_BATCH_SIZE]
+            A = self.sample_A[idx * self.GLOBAL_BATCH_SIZE:(idx + 1) * self.GLOBAL_BATCH_SIZE]
+            B = self.sample_B[idx * self.GLOBAL_BATCH_SIZE:(idx + 1) * self.GLOBAL_BATCH_SIZE]
             fake_A, fake_B = self.sess.run([self.sample_feat_A, self.sample_feat_B],
                                            feed_dict={self.real_img_A: A, self.real_feat_B: B})
             fake_A_list.append(fake_A[0])
