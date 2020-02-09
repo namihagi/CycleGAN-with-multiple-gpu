@@ -4,7 +4,7 @@ from tensorflow.contrib import slim
 from ops import deconv2d, instance_norm, lrelu, conv2d, residule_block
 
 
-def FeatureExtractor(input, reuse, name='feature_extractor'):
+def PreProcess_FeatureExtractor(input, reuse, name='feature_extractor'):
     # rapidly digested convolutional layers
     params = {
         'padding': 'SAME',
@@ -38,7 +38,7 @@ class generator_resnet:
             else:
                 assert tf.get_variable_scope().reuse is False
 
-            act = tf.nn.relu
+            act = tf.nn.leaky_relu
             _, h, w, c = input.shape.as_list()
 
             # Justin Johnson's model from https://github.com/jcjohnson/fast-neural-style/

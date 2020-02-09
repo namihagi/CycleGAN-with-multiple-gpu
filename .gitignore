@@ -4,4 +4,9 @@ log/*
 result/*
 sample/*
 __pycache__/*
+detection_src/__pycache__/*
+detection_src/utils/__pycache__/*
+detection_src/input_pipeline/__pycache__/*
+ckpt_for_detector/*
 .idea/*
+create_tfrecords_with_annotations.sh
