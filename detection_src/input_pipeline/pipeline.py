@@ -42,7 +42,7 @@ class Pipeline:
         dataset = dataset.map(self._parse_and_preprocess, num_parallel_calls=NUM_THREADS)
 
         # we need batches of fixed size
-        padded_shapes = ([32, 32, 128], [3], [None, 4], [], [])
+        padded_shapes = ([1024, 1024, 3], [3], [None, 4], [], [])
         dataset = dataset.apply(
             tf.contrib.data.padded_batch_and_drop_remainder(batch_size, padded_shapes)
         )
@@ -74,7 +74,7 @@ class Pipeline:
         features = {
             'filename': tf.FixedLenFeature([], tf.string),
             'shape': tf.FixedLenFeature([3], tf.int64),
-            'feature': tf.FixedLenFeature([], tf.string),
+            'image': tf.FixedLenFeature([], tf.string),
             'ymin': tf.FixedLenSequenceFeature([], tf.float32, allow_missing=True),
             'xmin': tf.FixedLenSequenceFeature([], tf.float32, allow_missing=True),
             'ymax': tf.FixedLenSequenceFeature([], tf.float32, allow_missing=True),
@@ -82,15 +82,12 @@ class Pipeline:
         }
         parsed_features = tf.parse_single_example(example_proto, features)
 
-        feature = tf.decode_raw(parsed_features['feature'], tf.float32)
-        feature = tf.reshape(feature, [32, 32, 128])
-        if self.max_range is not None:
-            feature = tf.clip_by_value(tf.to_float(feature), clip_value_min=0.0, clip_value_max=self.max_range)
-            feature = (feature / (self.max_range / 2)) - 1.0
-            feature = tf.clip_by_value(feature, clip_value_min=-1.0, clip_value_max=1.0)
-        else:
-            feature = tf.clip_by_value(tf.to_float(feature), clip_value_min=-1.0, clip_value_max=1.0)
-        # feature range is [-1.0, 1.0]
+        # get image
+        image = tf.image.decode_jpeg(parsed_features['image'], channels=3)
+        image = tf.image.convert_image_dtype(image, tf.float32)
+        # now pixel values are scaled to [0, 1] range
+        image = (image * 2.0) - 1.0
+        # now pixel values are scaled to [-1, 1] range
 
         # get ground truth boxes, they must be in from-zero-to-one format
         boxes = tf.stack([
@@ -103,4 +100,4 @@ class Pipeline:
 
         num_boxes = tf.to_int32(tf.shape(boxes)[0])
         filename = parsed_features['filename']
-        return feature, parsed_features['shape'], boxes, num_boxes, filename
+        return image, parsed_features['shape'], boxes, num_boxes, filename

@@ -24,7 +24,7 @@ def _string_feature(value):
     return tf.train.Feature(bytes_list=tf.train.BytesList(value=[value.tostring()]))
 
 
-def dict_to_tf_example(annotation, image_dir, npy_dir):
+def dict_to_tf_example(annotation, class_name, image_dir, npy_dir):
     """Convert dict to tf.Example proto.
 
     Notice that this function normalizes the bounding
@@ -43,14 +43,6 @@ def dict_to_tf_example(annotation, image_dir, npy_dir):
     image_path = os.path.join(image_dir, image_name)
     with tf.gfile.GFile(image_path, 'rb') as f:
         encoded_jpg = f.read()
-
-    # get image size
-    image_array = cv2.imread(image_path)
-    image_array = cv2.cvtColor(image_array, cv2.COLOR_BGR2RGB)
-    assert image_array.shape[-1] == 3, print(image_array.shape)
-
-    # load npy
-    feature = np.load(os.path.join(npy_dir, image_name.replace('.jpg', '.npy'))).astype(np.float32)
 
     # check image format
     encoded_jpg_io = io.BytesIO(encoded_jpg)
@@ -71,7 +63,7 @@ def dict_to_tf_example(annotation, image_dir, npy_dir):
         print(annotation_name, 'is without any objects!')
 
     for obj in annotation['object']:
-        if obj['name'] == 'aeroplane':
+        if obj['name'] == class_name:
             a = float(obj['bndbox']['ymin']) / height
             b = float(obj['bndbox']['xmin']) / width
             c = float(obj['bndbox']['ymax']) / height
@@ -84,8 +76,7 @@ def dict_to_tf_example(annotation, image_dir, npy_dir):
 
     example = tf.train.Example(features=tf.train.Features(feature={
         'filename': _bytes_feature(image_name.encode()),
-        'shape': tf.train.Feature(int64_list=tf.train.Int64List(value=image_array.shape)),
-        'feature': _string_feature(feature),
+        'image': _bytes_feature(encoded_jpg),
         'xmin': _float_list_feature(xmin),
         'xmax': _float_list_feature(xmax),
         'ymin': _float_list_feature(ymin),
@@ -101,6 +92,7 @@ def main():
     parser.add_argument('--annotations_dir', dest='annotations_dir', default=None)
     parser.add_argument('--npy_dir', dest='npy_dir', default=None)
     parser.add_argument('--output_dir', dest='output_dir', default=None)
+    parser.add_argument('--class_name', dest='class_name', default=None)
     args = parser.parse_args()
 
     print('Reading images from:', args.image_dir)
@@ -127,7 +119,7 @@ def main():
 
         path = os.path.join(args.annotations_dir, example)
         annotation = json.load(open(path))
-        tf_example = dict_to_tf_example(annotation, args.image_dir, args.npy_dir)
+        tf_example = dict_to_tf_example(annotation, class_name, args.image_dir, args.npy_dir)
         writer.write(tf_example.SerializeToString())
         num_examples_written += 1
 

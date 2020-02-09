@@ -7,7 +7,20 @@ class FeatureExtractor:
     def __init__(self, is_training):
         self.is_training = is_training
 
-    def __call__(self, input_features):
+    def __call__(self, image):
+        # rapidly digested convolutional layers
+        params = {
+            'padding': 'SAME',
+            'activation_fn': lambda x: tf.nn.crelu(x, axis=3),
+            'normalizer_fn': self.batch_norm, 'data_format': 'NHWC'
+        }
+        with slim.arg_scope([slim.conv2d], **params):
+            with slim.arg_scope([slim.max_pool2d], stride=2, padding='SAME', data_format='NHWC'):
+                x = slim.conv2d(image, 24, (7, 7), stride=4, scope='conv1')
+                x = slim.max_pool2d(x, (3, 3), scope='pool1')
+                x = slim.conv2d(x, 64, (5, 5), stride=2, scope='conv2')
+                x = slim.max_pool2d(x, (3, 3), scope='pool2')
+
         # multiple scale convolutional layers
         params = {
             'padding': 'SAME', 'activation_fn': tf.nn.relu,
@@ -15,7 +28,9 @@ class FeatureExtractor:
         }
         with slim.arg_scope([slim.conv2d], **params):
             features = []  # extracted feature maps
-            x = input_features
+            x = inception_module(x, scope='inception1')
+            x = inception_module(x, scope='inception2')
+            x = inception_module(x, scope='inception3')
             features.append(x)  # scale 0
             x = slim.conv2d(x, 128, (1, 1), scope='conv3_1')
             x = slim.conv2d(x, 256, (3, 3), stride=2, scope='conv3_2')

@@ -74,37 +74,35 @@ class Model(object):
 
     def _train_model(self):
         # placeholder
-        self.real_feat_A = tf.placeholder(tf.float32,
-                                          [self.batch_size, 32, 32, 128],
-                                          name="real_feat_A")
-        self.real_feat_B = tf.placeholder(tf.float32,
-                                          [self.batch_size, 32, 32, 128],
-                                          name="real_feat_B")
-        self.dummy_img_B = tf.zeros([self.batch_size, 1024, 1024, 3], dtype=tf.float32, name="dummy_img_B")
+        self.real_A = tf.placeholder(tf.float32,
+                                     [self.batch_size, 1024, 1024, 3],
+                                     name="real_A")
+        self.real_B = tf.placeholder(tf.float32,
+                                     [self.batch_size, 1024, 1024, 3],
+                                     name="real_B")
         self.B_boxes = tf.placeholder(tf.float32, [self.batch_size, None, 4], name="boxes_B")
         self.B_num_boxes = tf.placeholder(tf.int32, [self.batch_size], name="num_boxes_B")
 
         with tf.device('/gpu:0'):
             # generator
             # A > B > A
-            self.fake_feat_B = self.G_A2B(self.real_feat_A, reuse=False)
-            self.fake_feat_A_return = self.G_B2A(self.fake_feat_B, reuse=False)
+            self.fake_B = self.G_A2B(self.real_A, reuse=False)
+            self.fake_A_return = self.G_B2A(self.fake_B, reuse=False)
             # B > A > B
-            self.fake_feat_A = self.G_B2A(self.real_feat_B, reuse=True)
-            self.fake_feat_B_return = self.G_A2B(self.fake_feat_A, reuse=True)
+            self.fake_A = self.G_B2A(self.real_B, reuse=True)
+            self.fake_B_return = self.G_A2B(self.fake_A, reuse=True)
 
             # discriminator
-            self.DA_fake_A_score = self.D_A(self.fake_feat_A, reuse=False)
-            self.DA_real_A_score = self.D_A(self.real_feat_A, reuse=True)
-            self.DB_fake_B_score = self.D_B(self.fake_feat_B, reuse=False)
-            self.DB_real_B_score = self.D_B(self.real_feat_B, reuse=True)
+            self.DA_fake_A_score = self.D_A(self.fake_A, reuse=False)
+            self.DA_real_A_score = self.D_A(self.real_A, reuse=True)
+            self.DB_fake_B_score = self.D_B(self.fake_B, reuse=False)
+            self.DB_real_B_score = self.D_B(self.real_B, reuse=True)
 
             # detection model
             with tf.variable_scope('student'):
                 self.feature_extractor_fn = FeatureExtractor(is_training=False)
                 self.anchor_generator_fn = AnchorGenerator()
-                self.detector = Detector(self.inverse_B_feat(self.fake_feat_B_return), self.dummy_img_B,
-                                         self.feature_extractor_fn, self.anchor_generator_fn)
+                self.detector = Detector(self.fake_B_return, self.feature_extractor_fn, self.anchor_generator_fn)
 
                 with tf.name_scope('student_supervised_loss'):
                     labels = {'boxes': self.B_boxes, 'num_boxes': self.B_num_boxes}
@@ -116,8 +114,8 @@ class Model(object):
                     self.supervised_total_loss = self.localization_loss + self.classification_loss
 
             # loss for generator
-            self.loss_A_cyc = abs_criterion(self.real_feat_A, self.fake_feat_A_return)
-            self.loss_B_cyc = abs_criterion(self.real_feat_B, self.fake_feat_B_return)
+            self.loss_A_cyc = abs_criterion(self.real_A, self.fake_A_return)
+            self.loss_B_cyc = abs_criterion(self.real_B, self.fake_B_return)
             self.G_loss = self.criterionGAN(self.DA_fake_A_score, tf.ones_like(self.DA_fake_A_score)) \
                           + self.criterionGAN(self.DB_fake_B_score, tf.ones_like(self.DB_fake_B_score)) \
                           + self.cons_lambda * (self.loss_A_cyc + self.loss_B_cyc) \
@@ -135,8 +133,16 @@ class Model(object):
             self.D_loss = self.DA_loss + self.DB_loss
 
         # summary for loss
+        self.loss_A_cyc_sum = tf.summary.scalar("loss_A_cyc", self.loss_A_cyc)
+        self.loss_B_cyc_sum = tf.summary.scalar("loss_B_cyc", self.loss_B_cyc)
+        self.supervised_total_loss_sum = tf.summary.scalar("supervised_total_loss", self.supervised_total_loss)
         self.G_loss_sum = tf.summary.scalar("generator_loss", self.G_loss)
+        self.G_sum = tf.summary.merge([self.loss_A_cyc_sum, self.loss_B_cyc_sum,
+                                       self.supervised_total_loss_sum, self.G_loss_sum])
+        self.DA_loss_sum = tf.summary.scalar("DA_loss", self.DA_loss)
+        self.DB_loss_sum = tf.summary.scalar("DB_loss", self.DB_loss)
         self.D_loss_sum = tf.summary.scalar("discriminator_loss", self.D_loss)
+        self.D_sum = tf.summary.merge([self.DA_loss_sum, self.DB_loss_sum, self.D_loss_sum])
 
         # get variables
         self.t_vars = tf.trainable_variables()
@@ -163,22 +169,18 @@ class Model(object):
 
     def _test_model(self):
         # placeholder
-        self.real_feat_A = tf.placeholder(tf.float32,
-                                          [self.batch_size, 32, 32, 128],
-                                          name="real_feat_A")
-        self.dummy_img_A = tf.zeros([self.batch_size, 1024, 1024, 3], dtype=tf.float32, name="dummy_img_B")
+        self.real_A = tf.placeholder(tf.float32, [self.batch_size, 1024, 1024, 3], name="real_A")
 
         with tf.device('/gpu:0'):
             # generator
             # A > B
-            self.fake_feat_B = self.G_A2B(self.real_feat_A, reuse=False)
+            self.fake_B = self.G_A2B(self.real_A, reuse=False)
 
             # detection model
             with tf.variable_scope('student'):
                 self.feature_extractor_fn = FeatureExtractor(is_training=False)
                 self.anchor_generator_fn = AnchorGenerator()
-                self.detector = Detector(self.inverse_B_feat(self.fake_feat_B), self.dummy_img_A,
-                                         self.feature_extractor_fn, self.anchor_generator_fn)
+                self.detector = Detector(self.fake_B, self.feature_extractor_fn, self.anchor_generator_fn)
 
                 with tf.name_scope('student_prediction'):
                     self.prediction = self.detector.get_predictions(
@@ -187,20 +189,14 @@ class Model(object):
                         max_boxes=200
                     )
 
-    def inverse_B_feat(self, fake_feat_B_return):
-        inverse_feature = (fake_feat_B_return + 1.0) * (self.B_range / 2)
-        return inverse_feature
-
     def train(self):
         if self.load_detector():
             print(" [*] Load SUCCESS")
         else:
             print(" [!] Load failed...")
 
-        A_init_op, A_next_el, A_file_num = self.get_input_fn(self.datasetA_path,
-                                                             is_training=True, max_range=None)
-        B_init_op, B_next_el, B_file_num = self.get_input_fn(self.datasetB_path,
-                                                             is_training=True, max_range=self.B_range)
+        A_init_op, A_next_el, A_file_num = self.get_input_fn(self.datasetA_path, is_training=True)
+        B_init_op, B_next_el, B_file_num = self.get_input_fn(self.datasetB_path, is_training=True)
 
         # get num of iteration
         max_iter = min(A_file_num, B_file_num) // self.batch_size
@@ -224,22 +220,22 @@ class Model(object):
                         bar_iter.set_description('iteration')
 
                         # load data
-                        A_feature, A_img_shape, A_boxes, A_num_boxes, A_filename = self.sess.run(A_next_el)
-                        B_feature, B_img_shape, B_boxes, B_num_boxes, B_filename = self.sess.run(B_next_el)
+                        A_image, A_img_shape, A_boxes, A_num_boxes, A_filename = self.sess.run(A_next_el)
+                        B_image, B_img_shape, B_boxes, B_num_boxes, B_filename = self.sess.run(B_next_el)
 
                         # update G
-                        _, G_sum = self.sess.run([self.G_optim, self.G_loss_sum],
-                                                 feed_dict={self.real_feat_A: A_feature,
-                                                            self.real_feat_B: B_feature,
+                        _, G_sum = self.sess.run([self.G_optim, self.G_sum],
+                                                 feed_dict={self.real_A: A_image,
+                                                            self.real_B: B_image,
                                                             self.B_boxes: B_boxes,
                                                             self.B_num_boxes: B_num_boxes,
                                                             self.lr_ph: lr})
                         self.writer.add_summary(G_sum, counter)
 
                         # update D
-                        _, D_sum = self.sess.run([self.D_optim, self.D_loss_sum],
-                                                 feed_dict={self.real_feat_A: A_feature,
-                                                            self.real_feat_B: B_feature,
+                        _, D_sum = self.sess.run([self.D_optim, self.D_sum],
+                                                 feed_dict={self.real_A: A_image,
+                                                            self.real_B: B_image,
                                                             self.lr_ph: lr})
                         self.writer.add_summary(D_sum, counter)
                         counter += 1
@@ -259,8 +255,7 @@ class Model(object):
             print(" [!] Load failed...")
 
         # load dataset
-        A_init_op, A_next_el, A_file_num = self.get_input_fn(self.datasetA_path,
-                                                             is_training=True, max_range=None)
+        A_init_op, A_next_el, A_file_num = self.get_input_fn(self.datasetA_path, is_training=self.is_training)
 
         # initialize dataset iterator
         self.sess.run(A_init_op)
@@ -268,11 +263,11 @@ class Model(object):
         with tqdm(range(A_file_num)) as bar_iter:
             for idx in bar_iter:
                 # load data
-                A_feature, A_img_shape, A_boxes, A_num_boxes, A_filename = self.sess.run(A_next_el)
+                A_image, A_img_shape, A_boxes, A_num_boxes, A_filename = self.sess.run(A_next_el)
                 h, w, c = A_img_shape[0]
 
                 # prediction
-                predictions = self.sess.run(self.prediction, feed_dict={self.real_feat_A: A_feature})
+                predictions = self.sess.run(self.prediction, feed_dict={self.real_A: A_image})
                 # extract prediction
                 num_boxes = predictions['num_boxes'][0]
                 boxes = predictions['boxes'][0][:num_boxes]
@@ -325,10 +320,7 @@ class Model(object):
         filenames = [os.path.join(dataset_path, n) for n in sorted(filenames)]
 
         with tf.device('/cpu:0'), tf.name_scope('input_pipeline'):
-            pipeline = Pipeline(
-                filenames,
-                batch_size=self.batch_size, max_range=max_range, shuffle=is_training
-            )
+            pipeline = Pipeline(filenames, batch_size=self.batch_size, shuffle=is_training)
         return pipeline.get_init_op_and_next_el()
 
     def save_config(self):
@@ -354,8 +346,8 @@ class Model(object):
     #     for idx in range(max_iter):
     #         A = self.sample_A[idx * self.batch_size:(idx + 1) * self.batch_size]
     #         B = self.sample_B[idx * self.batch_size:(idx + 1) * self.batch_size]
-    #         fake_A, fake_B = self.sess.run([self.sample_feat_A, self.sample_feat_B],
-    #                                        feed_dict={self.real_img_A: A, self.real_feat_B: B})
+    #         fake_A, fake_B = self.sess.run([self.sample_A, self.sample_B],
+    #                                        feed_dict={self.real_img_A: A, self.real_B: B})
     #         fake_A_list.append(fake_A[0])
     #         fake_B_list.append(fake_B[0])
     #     save_sample_npy(npy_array=fake_A_list, max_range=self.B_range,

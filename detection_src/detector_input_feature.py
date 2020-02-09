@@ -9,7 +9,7 @@ from detection_src.losses_and_ohem import localization_loss, classification_loss
 
 
 class Detector:
-    def __init__(self, features, images, feature_extractor, anchor_generator):
+    def __init__(self, images, feature_extractor, anchor_generator):
         """
         Arguments:
             images: a float tensor with shape [batch_size, height, width, 3],
@@ -48,16 +48,13 @@ class Detector:
                 )
                 h, w = new_h, new_w
 
-        feature_maps = self.feature_extractor(features)
+        feature_maps = self.feature_extractor(images)
         self.is_training = self.feature_extractor.is_training
 
         self.anchors = anchor_generator(feature_maps, image_size=(w, h))
         self.num_anchors_per_location = anchor_generator.num_anchors_per_location
         self.num_anchors_per_feature_map = anchor_generator.num_anchors_per_feature_map
         self._add_box_predictions(feature_maps)
-
-    def get_feature_maps(self):
-        return self.feature_extractor.get_feature_maps()
 
     def get_predictions(self, score_threshold=0.1, iou_threshold=0.6, max_boxes=20):
         """Postprocess outputs of the network.
