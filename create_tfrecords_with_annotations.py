@@ -44,6 +44,15 @@ def dict_to_tf_example(annotation, class_name, image_dir, npy_dir):
     with tf.gfile.GFile(image_path, 'rb') as f:
         encoded_jpg = f.read()
 
+    # get image size
+    image_array = cv2.imread(image_path)
+    image_array = cv2.cvtColor(image_array, cv2.COLOR_BGR2RGB)
+    assert image_array.shape[-1] == 3, print(image_array.shape)
+
+    # load npy
+    feature = np.load(os.path.join(npy_dir, image_name.replace('.jpg', '.npy'))).astype(np.float32)
+    feature = np.reshape(feature, newshape=[32 * 32 * 128])
+
     # check image format
     encoded_jpg_io = io.BytesIO(encoded_jpg)
     image = PIL.Image.open(encoded_jpg_io)
@@ -76,7 +85,8 @@ def dict_to_tf_example(annotation, class_name, image_dir, npy_dir):
 
     example = tf.train.Example(features=tf.train.Features(feature={
         'filename': _bytes_feature(image_name.encode()),
-        'image': _bytes_feature(encoded_jpg),
+        'img_shape': tf.train.Feature(int64_list=tf.train.Int64List(value=image_array.shape)),
+        'feature': _float_list_feature(feature),
         'xmin': _float_list_feature(xmin),
         'xmax': _float_list_feature(xmax),
         'ymin': _float_list_feature(ymin),
@@ -119,7 +129,7 @@ def main():
 
         path = os.path.join(args.annotations_dir, example)
         annotation = json.load(open(path))
-        tf_example = dict_to_tf_example(annotation, class_name, args.image_dir, args.npy_dir)
+        tf_example = dict_to_tf_example(annotation, args.class_name, args.image_dir, args.npy_dir)
         writer.write(tf_example.SerializeToString())
         num_examples_written += 1
 

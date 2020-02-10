@@ -10,11 +10,13 @@ class Pipeline:
     """Input pipeline for training or evaluating object detectors."""
 
     def __init__(self, filenames, batch_size, max_range=None, shuffle=False):
-        """
-        :param max_range:
-            for ...
-        """
-        self.max_range = max_range
+        if max_range is None:
+            self.max_range = 1.0
+            self.min_range = -1.0
+        else:
+            self.max_range = max_range
+            self.min_range = 0.0
+
         self.batch_size = batch_size
 
         def get_num_samples(filename):
@@ -42,7 +44,7 @@ class Pipeline:
         dataset = dataset.map(self._parse_and_preprocess, num_parallel_calls=NUM_THREADS)
 
         # we need batches of fixed size
-        padded_shapes = ([1024, 1024, 3], [3], [None, 4], [], [])
+        padded_shapes = ([32, 32, 128], [3], [None, 4], [], [])
         dataset = dataset.apply(
             tf.contrib.data.padded_batch_and_drop_remainder(batch_size, padded_shapes)
         )
@@ -73,8 +75,8 @@ class Pipeline:
         """
         features = {
             'filename': tf.FixedLenFeature([], tf.string),
-            'shape': tf.FixedLenFeature([3], tf.int64),
-            'image': tf.FixedLenFeature([], tf.string),
+            'img_shape': tf.FixedLenFeature([3], tf.int64),
+            'feature': tf.FixedLenSequenceFeature([], tf.float32, allow_missing=True),
             'ymin': tf.FixedLenSequenceFeature([], tf.float32, allow_missing=True),
             'xmin': tf.FixedLenSequenceFeature([], tf.float32, allow_missing=True),
             'ymax': tf.FixedLenSequenceFeature([], tf.float32, allow_missing=True),
@@ -82,11 +84,14 @@ class Pipeline:
         }
         parsed_features = tf.parse_single_example(example_proto, features)
 
-        # get image
-        image = tf.image.decode_jpeg(parsed_features['image'], channels=3)
-        image = tf.image.convert_image_dtype(image, tf.float32)
-        # now pixel values are scaled to [0, 1] range
-        image = (image * 2.0) - 1.0
+        # get feature
+        feature = tf.to_float(parsed_features['feature'])
+        feature = tf.reshape(feature, [32, 32, 128])
+        feature = tf.clip_by_value(feature, clip_value_min=self.min_range, clip_value_max=self.max_range)
+        # now pixel values are scaled to [min_range, max_range] range
+        if self.max_range != 1.0:
+            feature = (feature / (self.max_range / 2)) - 1.0
+        feature = tf.clip_by_value(feature, clip_value_min=-1.0, clip_value_max=1.0)
         # now pixel values are scaled to [-1, 1] range
 
         # get ground truth boxes, they must be in from-zero-to-one format
@@ -98,6 +103,7 @@ class Pipeline:
         # it is important to clip here!
         boxes = tf.clip_by_value(boxes, clip_value_min=0.0, clip_value_max=1.0)
 
+        img_shape = tf.to_int32(parsed_features['img_shape'])
         num_boxes = tf.to_int32(tf.shape(boxes)[0])
         filename = parsed_features['filename']
-        return image, parsed_features['shape'], boxes, num_boxes, filename
+        return feature, img_shape, boxes, num_boxes, filename

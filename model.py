@@ -23,18 +23,17 @@ class Model(object):
         self.lr_decay_epoch = args.lr_decay_epoch
         self.lr = args.lr
         self.hidden_dim = args.hidden_dim
+        self.output_c_dim = args.output_c_dim
         self.cons_lambda = args.cons_lambda
         self.dete_lambda = args.dete_lambda
-        self.beta1 = args.hidden_dim
-
-        # input setting
+        self.beta1 = args.beta1
         self.B_range = args.B_range
 
         # network setting
-        self.G_A2B = generator_resnet(name='generatorA2B')
-        self.G_B2A = generator_resnet(name='generatorB2A')
-        self.D_A = discriminator(name='discriminatorA', hidden_dim=self.hidden_dim)
-        self.D_B = discriminator(name='discriminatorB', hidden_dim=self.hidden_dim)
+        self.G_A2B = generator_resnet(hidden_dim=self.hidden_dim, output_c_dim=self.output_c_dim, name='generatorA2B')
+        self.G_B2A = generator_resnet(hidden_dim=self.hidden_dim, output_c_dim=self.output_c_dim, name='generatorB2A')
+        self.D_A = discriminator(hidden_dim=64, name='discriminatorA')
+        self.D_B = discriminator(hidden_dim=64, name='discriminatorB')
         self.criterionGAN = mae_criterion
         self.detector_params = {
             "weight_decay": 1e-3,
@@ -47,8 +46,10 @@ class Model(object):
         }
 
         # directory setting
-        self.datasetA_path = args.datasetA_path
-        self.datasetB_path = args.datasetA_path
+        self.train_A_path = args.train_A_path
+        self.train_B_path = args.train_B_path
+        self.test_A_path = args.test_A_path
+        self.test_B_path = args.test_B_path
         self.sub_dir = args.sub_dir
         assert self.sub_dir is not None
         self.result_dir = os.path.join('./result', args.sub_dir)
@@ -56,9 +57,6 @@ class Model(object):
         self.checkpoint_dir = os.path.join('./checkpoint', args.sub_dir)
         for dir_path in [self.result_dir, self.log_dir, self.checkpoint_dir]:
             makedirs(dir_path=dir_path)
-
-        # # sample data
-        # self.sample_A, self.sample_B = self.get_sample_data()
 
         # initialize graph
         if self.is_training:
@@ -74,12 +72,8 @@ class Model(object):
 
     def _train_model(self):
         # placeholder
-        self.real_A = tf.placeholder(tf.float32,
-                                     [self.batch_size, 1024, 1024, 3],
-                                     name="real_A")
-        self.real_B = tf.placeholder(tf.float32,
-                                     [self.batch_size, 1024, 1024, 3],
-                                     name="real_B")
+        self.real_A = tf.placeholder(tf.float32, [self.batch_size, 32, 32, 128], name="real_A")
+        self.real_B = tf.placeholder(tf.float32, [self.batch_size, 32, 32, 128], name="real_B")
         self.B_boxes = tf.placeholder(tf.float32, [self.batch_size, None, 4], name="boxes_B")
         self.B_num_boxes = tf.placeholder(tf.int32, [self.batch_size], name="num_boxes_B")
 
@@ -102,7 +96,9 @@ class Model(object):
             with tf.variable_scope('student'):
                 self.feature_extractor_fn = FeatureExtractor(is_training=False)
                 self.anchor_generator_fn = AnchorGenerator()
-                self.detector = Detector(self.fake_B_return, self.feature_extractor_fn, self.anchor_generator_fn)
+                self.inverse_fake_B_return = self._inverse_before_detector(self.fake_B_return)
+                self.detector = Detector(self.inverse_fake_B_return, tf.zeros([self.batch_size, 1024, 1024, 3]),
+                                         self.feature_extractor_fn, self.anchor_generator_fn)
 
                 with tf.name_scope('student_supervised_loss'):
                     labels = {'boxes': self.B_boxes, 'num_boxes': self.B_num_boxes}
@@ -169,25 +165,27 @@ class Model(object):
 
     def _test_model(self):
         # placeholder
-        self.real_A = tf.placeholder(tf.float32, [self.batch_size, 1024, 1024, 3], name="real_A")
+        self.real_A = tf.placeholder(tf.float32, [self.batch_size, 32, 32, 128], name="real_A")
+        # convert feature
+        self.fake_B = self.G_A2B(self.real_A, reuse=False)
+        # detection model
+        with tf.variable_scope('student'):
+            self.feature_extractor_fn = FeatureExtractor(is_training=False)
+            self.anchor_generator_fn = AnchorGenerator()
+            self.inverse_fake_B = self._inverse_before_detector(self.fake_B)
+            self.detector = Detector(self.inverse_fake_B, tf.zeros([self.batch_size, 1024, 1024, 3]),
+                                     self.feature_extractor_fn, self.anchor_generator_fn)
 
-        with tf.device('/gpu:0'):
-            # generator
-            # A > B
-            self.fake_B = self.G_A2B(self.real_A, reuse=False)
+            with tf.name_scope('student_prediction'):
+                self.prediction = self.detector.get_predictions(
+                    score_threshold=0.5,
+                    iou_threshold=0.5,
+                    max_boxes=200
+                )
 
-            # detection model
-            with tf.variable_scope('student'):
-                self.feature_extractor_fn = FeatureExtractor(is_training=False)
-                self.anchor_generator_fn = AnchorGenerator()
-                self.detector = Detector(self.fake_B, self.feature_extractor_fn, self.anchor_generator_fn)
-
-                with tf.name_scope('student_prediction'):
-                    self.prediction = self.detector.get_predictions(
-                        score_threshold=0.5,
-                        iou_threshold=0.5,
-                        max_boxes=200
-                    )
+    def _inverse_before_detector(self, feature):
+        inverse_feature = (feature + 1.0) * (self.B_range / 2.0)
+        return tf.clip_by_value(inverse_feature, clip_value_min=0.0, clip_value_max=self.B_range)
 
     def train(self):
         if self.load_detector():
@@ -195,8 +193,9 @@ class Model(object):
         else:
             print(" [!] Load failed...")
 
-        A_init_op, A_next_el, A_file_num = self.get_input_fn(self.datasetA_path, is_training=True)
-        B_init_op, B_next_el, B_file_num = self.get_input_fn(self.datasetB_path, is_training=True)
+        A_init_op, A_next_el, A_file_num = self.get_input_fn(self.train_A_path, is_training=True)
+        B_init_op, B_next_el, B_file_num = self.get_input_fn(self.train_B_path,
+                                                             max_range=self.B_range,  is_training=True)
 
         # get num of iteration
         max_iter = min(A_file_num, B_file_num) // self.batch_size
@@ -230,6 +229,7 @@ class Model(object):
                                                             self.B_boxes: B_boxes,
                                                             self.B_num_boxes: B_num_boxes,
                                                             self.lr_ph: lr})
+                        # self.B_num_boxes: B_num_boxes,
                         self.writer.add_summary(G_sum, counter)
 
                         # update D
@@ -240,63 +240,57 @@ class Model(object):
                         self.writer.add_summary(D_sum, counter)
                         counter += 1
 
-                # # save samples
-                # if (epoch + 1) % (self.epoch // 10) == 0:
-                #     self.save_samples(epoch)
-
         # save model when finish training
-        self.save(self.checkpoint_dir)
+        self.save()
         self.save_config()
 
-    def test(self):
-        if self.load(self.checkpoint_dir):
-            print(" [*] Load SUCCESS")
-        else:
-            print(" [!] Load failed...")
+    # def test(self):
+    #     if self.load():
+    #         print(" [*] Load SUCCESS")
+    #     else:
+    #         print(" [!] Load failed...")
+    #
+    #     # load dataset
+    #     A_init_op, A_next_el, A_file_num = self.get_input_fn(self.train_A_path, is_training=self.is_training)
+    #
+    #     # initialize dataset iterator
+    #     self.sess.run(A_init_op)
+    #
+    #     with tqdm(range(A_file_num)) as bar_iter:
+    #         for idx in bar_iter:
+    #             # load data
+    #             A_image, A_boxes, A_num_boxes, A_filename = self.sess.run(A_next_el)
+    #             h, w, c = A_image[0].shape
+    #
+    #             # prediction
+    #             predictions = self.sess.run(self.prediction, feed_dict={self.real_A: A_image})
+    #             # extract prediction
+    #             num_boxes = predictions['num_boxes'][0]
+    #             boxes = predictions['boxes'][0][:num_boxes]
+    #             scores = predictions['scores'][0][:num_boxes]
+    #
+    #             scaler = np.array([h, w, h, w], dtype='float32')
+    #             boxes = boxes * scaler
+    #
+    #             output_prediction_from_image(pred_scores=scores, pred_boxes=boxes, img_w=w, img_h=h,
+    #                                          class_name=self.class_name, output_dir=self.result_dir,
+    #                                          file_path=A_filename[0])
 
-        # load dataset
-        A_init_op, A_next_el, A_file_num = self.get_input_fn(self.datasetA_path, is_training=self.is_training)
-
-        # initialize dataset iterator
-        self.sess.run(A_init_op)
-
-        with tqdm(range(A_file_num)) as bar_iter:
-            for idx in bar_iter:
-                # load data
-                A_image, A_img_shape, A_boxes, A_num_boxes, A_filename = self.sess.run(A_next_el)
-                h, w, c = A_img_shape[0]
-
-                # prediction
-                predictions = self.sess.run(self.prediction, feed_dict={self.real_A: A_image})
-                # extract prediction
-                num_boxes = predictions['num_boxes'][0]
-                boxes = predictions['boxes'][0][:num_boxes]
-                scores = predictions['scores'][0][:num_boxes]
-
-                scaler = np.array([h, w, h, w], dtype='float32')
-                boxes = boxes * scaler
-
-                output_prediction_from_image(pred_scores=scores, pred_boxes=boxes, img_w=w, img_h=h,
-                                             class_name=self.class_name, output_dir=self.result_dir,
-                                             file_path=A_filename[0])
-
-    def save(self, checkpoint_dir, counter=None):
+    def save(self):
         model_name = "{}.ckpt".format(self.sub_dir)
 
-        if not os.path.exists(checkpoint_dir):
-            os.makedirs(checkpoint_dir)
+        if not os.path.exists(self.checkpoint_dir):
+            os.makedirs(self.checkpoint_dir)
 
-        self.saver.save(self.sess,
-                        os.path.join(checkpoint_dir, model_name),
-                        global_step=counter)
+        self.saver.save(self.sess, os.path.join(self.checkpoint_dir, model_name))
 
-    def load(self, checkpoint_dir):
+    def load(self):
         print(" [*] Reading checkpoint...")
 
-        ckpt = tf.train.get_checkpoint_state(checkpoint_dir)
+        ckpt = tf.train.get_checkpoint_state(self.checkpoint_dir)
         if ckpt and ckpt.model_checkpoint_path:
             ckpt_name = os.path.basename(ckpt.model_checkpoint_path)
-            self.saver.restore(self.sess, os.path.join(checkpoint_dir, ckpt_name))
+            self.saver.restore(self.sess, os.path.join(self.checkpoint_dir, ckpt_name))
             return True
         else:
             return False
@@ -320,7 +314,7 @@ class Model(object):
         filenames = [os.path.join(dataset_path, n) for n in sorted(filenames)]
 
         with tf.device('/cpu:0'), tf.name_scope('input_pipeline'):
-            pipeline = Pipeline(filenames, batch_size=self.batch_size, shuffle=is_training)
+            pipeline = Pipeline(filenames, batch_size=self.batch_size, max_range=max_range, shuffle=is_training)
         return pipeline.get_init_op_and_next_el()
 
     def save_config(self):
@@ -328,60 +322,16 @@ class Model(object):
             "batch_size": self.batch_size,
             "epoch": self.epoch,
             "lr": self.lr,
-            "hidden_dim": self.hidden_dim,
+            "lr_decay_epoch": self.lr_decay_epoch,
             "cons_lambda": self.cons_lambda,
             "dete_lambda": self.dete_lambda,
             "beta1": self.beta1,
+            "hidden_dim": self.hidden_dim,
+            "output_c_dim": self.output_c_dim,
             "B_range": self.B_range,
-            "datasetA_path": self.datasetA_path,
-            "datasetB_path": self.datasetB_path
+            "train_A_path": self.train_A_path,
+            "train_B_path": self.train_B_path,
+            "test_A_path": self.test_A_path,
+            "test_B_path": self.test_B_path
         }
         json.dump(save_dict, open(os.path.join(self.result_dir, 'config.json'), 'w'))
-
-    # def save_samples(self, epoch):
-    #     num_sample = len(self.sample_A)
-    #     max_iter = num_sample // self.batch_size
-    #     fake_A_list = []
-    #     fake_B_list = []
-    #     for idx in range(max_iter):
-    #         A = self.sample_A[idx * self.batch_size:(idx + 1) * self.batch_size]
-    #         B = self.sample_B[idx * self.batch_size:(idx + 1) * self.batch_size]
-    #         fake_A, fake_B = self.sess.run([self.sample_A, self.sample_B],
-    #                                        feed_dict={self.real_img_A: A, self.real_B: B})
-    #         fake_A_list.append(fake_A[0])
-    #         fake_B_list.append(fake_B[0])
-    #     save_sample_npy(npy_array=fake_A_list, max_range=self.B_range,
-    #                     output_dir=os.path.join(self.sample_dir, "%04d" % epoch, 'fake_B2A'))
-    #     save_sample_npy(npy_array=fake_B_list, max_range=self.B_range,
-    #                     output_dir=os.path.join(self.sample_dir, "%04d" % epoch, 'fake_A2B'))
-    #
-    # def get_sample_data(self):
-    #     A_pipeline = ImagePipeline(os.path.join(self.dataset_dir, self.datasetA),
-    #                                batch_size=1, image_size=self.image_size, shuffle=False)
-    #     A_init_op, A_next_el = A_pipeline.get_init_op_and_next_el()
-    #     B_pipeline = NpyPipeline(os.path.join(self.dataset_dir, self.datasetB),
-    #                              batch_size=1, max_range=self.B_range, shuffle=False)
-    #     B_init_op, B_next_el = B_pipeline.get_init_op_and_next_el()
-    #     self.sess.run([A_init_op, B_init_op])
-    #
-    #     num_sample = 0
-    #     while num_sample < 9:
-    #         num_sample += self.batch_size
-    #
-    #     sample_A = []
-    #     for idx in range(num_sample):
-    #         _, imageA = self.sess.run(A_next_el)
-    #         sample_A.append(imageA[0])
-    #
-    #     sample_B = []
-    #     for idx in range(num_sample):
-    #         _, featureB = self.sess.run(B_next_el)
-    #         sample_B.append(featureB[0])
-    #
-    #     del A_pipeline
-    #     del B_pipeline
-    #     save_sample_image(image_array=np.array(sample_A, dtype=np.float32),
-    #                       output_dir=os.path.join(self.sample_dir, "base", 'real_A'))
-    #     save_sample_npy(npy_array=sample_B, max_range=self.B_range,
-    #                     output_dir=os.path.join(self.sample_dir, "base", 'real_B'))
-    #     return sample_A, sample_B
