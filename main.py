@@ -40,8 +40,8 @@ def main(_):
         model = Model(sess, args)
         if args.phase == 'train':
             model.train()
-        # else:
-        #     model.test()
+        else:
+            model.test()
 
 
 if __name__ == '__main__':

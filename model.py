@@ -244,37 +244,39 @@ class Model(object):
         self.save()
         self.save_config()
 
-    # def test(self):
-    #     if self.load():
-    #         print(" [*] Load SUCCESS")
-    #     else:
-    #         print(" [!] Load failed...")
-    #
-    #     # load dataset
-    #     A_init_op, A_next_el, A_file_num = self.get_input_fn(self.train_A_path, is_training=self.is_training)
-    #
-    #     # initialize dataset iterator
-    #     self.sess.run(A_init_op)
-    #
-    #     with tqdm(range(A_file_num)) as bar_iter:
-    #         for idx in bar_iter:
-    #             # load data
-    #             A_image, A_boxes, A_num_boxes, A_filename = self.sess.run(A_next_el)
-    #             h, w, c = A_image[0].shape
-    #
-    #             # prediction
-    #             predictions = self.sess.run(self.prediction, feed_dict={self.real_A: A_image})
-    #             # extract prediction
-    #             num_boxes = predictions['num_boxes'][0]
-    #             boxes = predictions['boxes'][0][:num_boxes]
-    #             scores = predictions['scores'][0][:num_boxes]
-    #
-    #             scaler = np.array([h, w, h, w], dtype='float32')
-    #             boxes = boxes * scaler
-    #
-    #             output_prediction_from_image(pred_scores=scores, pred_boxes=boxes, img_w=w, img_h=h,
-    #                                          class_name=self.class_name, output_dir=self.result_dir,
-    #                                          file_path=A_filename[0])
+    def test(self):
+        if self.load():
+            print(" [*] Load SUCCESS")
+        else:
+            print(" [!] Load failed...")
+
+        # load dataset
+        A_init_op, A_next_el, A_file_num = self.get_input_fn(self.test_A_path, is_training=self.is_training)
+
+        # initialize dataset iterator
+        self.sess.run(A_init_op)
+
+        with tqdm(range(A_file_num)) as bar_iter:
+            for idx in bar_iter:
+                # load data
+                A_image, A_img_shape, A_boxes, A_num_boxes, A_filename = self.sess.run(A_next_el)
+                h, w, c = A_image[0].shape
+
+                # prediction
+                predictions = self.sess.run(self.prediction, feed_dict={self.real_A: A_image})
+                # extract prediction
+                num_boxes = predictions['num_boxes'][0]
+                boxes = predictions['boxes'][0][:num_boxes]
+                scores = predictions['scores'][0][:num_boxes]
+
+                scaler = np.array([h, w, h, w], dtype='float32')
+                boxes = boxes * scaler
+
+                output_dir = os.path.join(self.result_dir, 'prediction')
+                makedirs(output_dir)
+                output_prediction_from_image(pred_scores=scores, pred_boxes=boxes, img_w=w, img_h=h,
+                                             class_name=self.class_name, output_dir=output_dir,
+                                             file_path=A_filename[0])
 
     def save(self):
         model_name = "{}.ckpt".format(self.sub_dir)
