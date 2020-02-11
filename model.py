@@ -107,15 +107,14 @@ class Model(object):
                         self.detector_params['localization_loss_weight'] * losses['localization_loss']
                     self.classification_loss = \
                         self.detector_params['classification_loss_weight'] * losses['classification_loss']
-                    self.supervised_total_loss = self.localization_loss + self.classification_loss
+                    self.detector_loss = self.localization_loss + self.classification_loss
 
             # loss for generator
             self.loss_A_cyc = abs_criterion(self.real_A, self.fake_A_return)
             self.loss_B_cyc = abs_criterion(self.real_B, self.fake_B_return)
             self.G_loss = self.criterionGAN(self.DA_fake_A_score, tf.ones_like(self.DA_fake_A_score)) \
                           + self.criterionGAN(self.DB_fake_B_score, tf.ones_like(self.DB_fake_B_score)) \
-                          + self.cons_lambda * (self.loss_A_cyc + self.loss_B_cyc) \
-                          + self.dete_lambda * self.supervised_total_loss
+                          + self.cons_lambda * (self.loss_A_cyc + self.loss_B_cyc)
 
             # loss for D_A
             self.DA_fake_A_loss = self.criterionGAN(self.DA_fake_A_score, tf.zeros_like(self.DA_fake_A_score))
@@ -131,10 +130,9 @@ class Model(object):
         # summary for loss
         self.loss_A_cyc_sum = tf.summary.scalar("loss_A_cyc", self.loss_A_cyc)
         self.loss_B_cyc_sum = tf.summary.scalar("loss_B_cyc", self.loss_B_cyc)
-        self.supervised_total_loss_sum = tf.summary.scalar("supervised_total_loss", self.supervised_total_loss)
+        self.detector_loss_sum = tf.summary.scalar("detector_loss", self.detector_loss)
         self.G_loss_sum = tf.summary.scalar("generator_loss", self.G_loss)
-        self.G_sum = tf.summary.merge([self.loss_A_cyc_sum, self.loss_B_cyc_sum,
-                                       self.supervised_total_loss_sum, self.G_loss_sum])
+        self.G_sum = tf.summary.merge([self.loss_A_cyc_sum, self.loss_B_cyc_sum, self.G_loss_sum])
         self.DA_loss_sum = tf.summary.scalar("DA_loss", self.DA_loss)
         self.DB_loss_sum = tf.summary.scalar("DB_loss", self.DB_loss)
         self.D_loss_sum = tf.summary.scalar("discriminator_loss", self.D_loss)
@@ -162,6 +160,8 @@ class Model(object):
         self.lr_ph = tf.placeholder(tf.float32, name='learning_rate')
         self.D_optim = tf.train.AdamOptimizer(self.lr_ph, beta1=self.beta1).minimize(self.D_loss, var_list=self.d_vars)
         self.G_optim = tf.train.AdamOptimizer(self.lr_ph, beta1=self.beta1).minimize(self.G_loss, var_list=self.g_vars)
+        self.G_detector_optim = tf.train.AdamOptimizer(self.lr_ph, beta1=self.beta1) \
+            .minimize(self.detector_loss, var_list=self.g_vars)
 
     def _test_model(self):
         # placeholder
@@ -195,7 +195,7 @@ class Model(object):
 
         A_init_op, A_next_el, A_file_num = self.get_input_fn(self.train_A_path, is_training=True)
         B_init_op, B_next_el, B_file_num = self.get_input_fn(self.train_B_path,
-                                                             max_range=self.B_range,  is_training=True)
+                                                             max_range=self.B_range, is_training=True)
 
         # get num of iteration
         max_iter = min(A_file_num, B_file_num) // self.batch_size
@@ -226,11 +226,18 @@ class Model(object):
                         _, G_sum = self.sess.run([self.G_optim, self.G_sum],
                                                  feed_dict={self.real_A: A_image,
                                                             self.real_B: B_image,
-                                                            self.B_boxes: B_boxes,
-                                                            self.B_num_boxes: B_num_boxes,
                                                             self.lr_ph: lr})
                         # self.B_num_boxes: B_num_boxes,
                         self.writer.add_summary(G_sum, counter)
+
+                        # update G by detector loss
+                        if epoch >= self.epoch // 3:
+                            _, detector_loss_sum = self.sess.run([self.G_detector_optim, self.detector_loss_sum],
+                                                                 feed_dict={self.real_B: B_image,
+                                                                            self.B_boxes: B_boxes,
+                                                                            self.B_num_boxes: B_num_boxes,
+                                                                            self.lr_ph: lr})
+                            self.writer.add_summary(detector_loss_sum, counter)
 
                         # update D
                         _, D_sum = self.sess.run([self.D_optim, self.D_sum],
@@ -244,37 +251,39 @@ class Model(object):
         self.save()
         self.save_config()
 
-    # def test(self):
-    #     if self.load():
-    #         print(" [*] Load SUCCESS")
-    #     else:
-    #         print(" [!] Load failed...")
-    #
-    #     # load dataset
-    #     A_init_op, A_next_el, A_file_num = self.get_input_fn(self.train_A_path, is_training=self.is_training)
-    #
-    #     # initialize dataset iterator
-    #     self.sess.run(A_init_op)
-    #
-    #     with tqdm(range(A_file_num)) as bar_iter:
-    #         for idx in bar_iter:
-    #             # load data
-    #             A_image, A_boxes, A_num_boxes, A_filename = self.sess.run(A_next_el)
-    #             h, w, c = A_image[0].shape
-    #
-    #             # prediction
-    #             predictions = self.sess.run(self.prediction, feed_dict={self.real_A: A_image})
-    #             # extract prediction
-    #             num_boxes = predictions['num_boxes'][0]
-    #             boxes = predictions['boxes'][0][:num_boxes]
-    #             scores = predictions['scores'][0][:num_boxes]
-    #
-    #             scaler = np.array([h, w, h, w], dtype='float32')
-    #             boxes = boxes * scaler
-    #
-    #             output_prediction_from_image(pred_scores=scores, pred_boxes=boxes, img_w=w, img_h=h,
-    #                                          class_name=self.class_name, output_dir=self.result_dir,
-    #                                          file_path=A_filename[0])
+    def test(self):
+        if self.load():
+            print(" [*] Load SUCCESS")
+        else:
+            print(" [!] Load failed...")
+
+        # load dataset
+        A_init_op, A_next_el, A_file_num = self.get_input_fn(self.test_A_path, is_training=self.is_training)
+
+        # initialize dataset iterator
+        self.sess.run(A_init_op)
+
+        with tqdm(range(A_file_num)) as bar_iter:
+            for idx in bar_iter:
+                # load data
+                A_image, A_img_shape, A_boxes, A_num_boxes, A_filename = self.sess.run(A_next_el)
+                h, w, c = A_image[0].shape
+
+                # prediction
+                predictions = self.sess.run(self.prediction, feed_dict={self.real_A: A_image})
+                # extract prediction
+                num_boxes = predictions['num_boxes'][0]
+                boxes = predictions['boxes'][0][:num_boxes]
+                scores = predictions['scores'][0][:num_boxes]
+
+                scaler = np.array([h, w, h, w], dtype='float32')
+                boxes = boxes * scaler
+
+                output_dir = os.path.join(self.result_dir, 'prediction')
+                makedirs(output_dir)
+                output_prediction_from_image(pred_scores=scores, pred_boxes=boxes, img_w=w, img_h=h,
+                                             class_name=self.class_name, output_dir=output_dir,
+                                             file_path=A_filename[0])
 
     def save(self):
         model_name = "{}.ckpt".format(self.sub_dir)
