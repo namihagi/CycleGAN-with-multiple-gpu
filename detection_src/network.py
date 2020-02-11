@@ -18,27 +18,15 @@ class FeatureExtractor:
             has shape [batch, height_i, width_i, channels_i].
         """
 
-        def batch_norm(x):
-            x = tf.layers.batch_normalization(
-                x, axis=3, center=True, scale=True,
-                momentum=BATCH_NORM_MOMENTUM, epsilon=0.001,
-                training=self.is_training, fused=True,
-                name='batch_norm'
-            )
-            return x
-
-        with tf.name_scope('standardize_input'):
-            x = preprocess(images)
-
         # rapidly digested convolutional layers
         params = {
             'padding': 'SAME',
             'activation_fn': lambda x: tf.nn.crelu(x, axis=3),
-            'normalizer_fn': batch_norm, 'data_format': 'NHWC'
+            'normalizer_fn': self.batch_norm, 'data_format': 'NHWC'
         }
         with slim.arg_scope([slim.conv2d], **params):
             with slim.arg_scope([slim.max_pool2d], stride=2, padding='SAME', data_format='NHWC'):
-                x = slim.conv2d(x, 24, (7, 7), stride=4, scope='conv1')
+                x = slim.conv2d(images, 24, (7, 7), stride=4, scope='conv1')
                 x = slim.max_pool2d(x, (3, 3), scope='pool1')
                 x = slim.conv2d(x, 64, (5, 5), stride=2, scope='conv2')
                 x = slim.max_pool2d(x, (3, 3), scope='pool2')
@@ -46,14 +34,13 @@ class FeatureExtractor:
         # multiple scale convolutional layers
         params = {
             'padding': 'SAME', 'activation_fn': tf.nn.relu,
-            'normalizer_fn': batch_norm, 'data_format': 'NHWC'
+            'normalizer_fn': self.batch_norm, 'data_format': 'NHWC'
         }
         with slim.arg_scope([slim.conv2d], **params):
             features = []  # extracted feature maps
             x = inception_module(x, scope='inception1')
             x = inception_module(x, scope='inception2')
             x = inception_module(x, scope='inception3')
-            self.features = x
             features.append(x)  # scale 0
             x = slim.conv2d(x, 128, (1, 1), scope='conv3_1')
             x = slim.conv2d(x, 256, (3, 3), stride=2, scope='conv3_2')
@@ -64,8 +51,14 @@ class FeatureExtractor:
 
         return features
 
-    def get_feature_maps(self):
-        return self.features
+    def batch_norm(self, x):
+        x = tf.layers.batch_normalization(
+            x, axis=3, center=True, scale=True,
+            momentum=BATCH_NORM_MOMENTUM, epsilon=0.001,
+            training=self.is_training, fused=True,
+            name='batch_norm'
+        )
+        return x
 
 
 def preprocess(images):

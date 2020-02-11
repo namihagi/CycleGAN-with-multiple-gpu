@@ -1,3 +1,4 @@
+import tensorflow as tf
 import tensorflow.contrib.slim as slim
 
 from detection_src.constants import MATCHING_THRESHOLD, PARALLEL_ITERATIONS
@@ -53,9 +54,6 @@ class Detector:
         self.num_anchors_per_location = anchor_generator.num_anchors_per_location
         self.num_anchors_per_feature_map = anchor_generator.num_anchors_per_feature_map
         self._add_box_predictions(feature_maps)
-
-    def get_feature_maps(self):
-        return self.feature_extractor.get_feature_maps()
 
     def get_predictions(self, score_threshold=0.1, iou_threshold=0.6, max_boxes=20):
         """Postprocess outputs of the network.
