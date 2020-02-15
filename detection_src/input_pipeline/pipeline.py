@@ -9,8 +9,11 @@ from detection_src.input_pipeline.other_augmentations import random_color_manipu
 class Pipeline:
     """Input pipeline for training or evaluating object detectors."""
 
-    def __init__(self, filenames, batch_size, image_size=1024, shuffle=False):
-        self.image_size = image_size
+    def __init__(self, filenames, is_training, batch_size,
+                 load_size=286, fine_size=256, shuffle=False):
+        self.is_training = is_training
+        self.load_size = load_size
+        self.fine_size = fine_size
         self.batch_size = batch_size
 
         def get_num_samples(filename):
@@ -38,7 +41,7 @@ class Pipeline:
         dataset = dataset.map(self._parse_and_preprocess, num_parallel_calls=NUM_THREADS)
 
         # we need batches of fixed size
-        padded_shapes = ([self.image_size, self.image_size, 3], [3], [None, 4], [], [])
+        padded_shapes = ([self.fine_size, self.fine_size, 3], [3], [None, 4], [], [])
         dataset = dataset.apply(
             tf.contrib.data.padded_batch_and_drop_remainder(batch_size, padded_shapes)
         )
@@ -82,7 +85,11 @@ class Pipeline:
         image = tf.image.decode_jpeg(parsed_features['image'], channels=3)
         image = tf.image.convert_image_dtype(image, tf.float32)
         # now pixel values are scaled to [0, 1] range
-        image = tf.image.resize_images(image, size=[self.image_size, self.image_size])
+        if self.is_training:
+            image = tf.image.resize_images(image, size=[self.load_size, self.load_size])
+            image = tf.image.random_crop(image, size=[self.fine_size, self.fine_size, 3])
+        else:
+            image = tf.image.resize_images(image, size=[self.fine_size, self.fine_size])
         image = tf.clip_by_value(image, clip_value_min=0.0, clip_value_max=1.0)
         image = (image * 2.0) - 1.0
         # now pixel values are scaled to [-1, 1] range

@@ -17,6 +17,11 @@ parser.add_argument('--test_B_path', dest='test_B_path', default=None, help='tes
 parser.add_argument('--class_name', dest='class_name', default=None, help='class name for test')
 parser.add_argument('--sub_dir', dest='sub_dir', default=None, help='sub directory name')
 
+# test detection dir
+parser.add_argument('--input_dir', dest='input_dir', default=None, help='input_dir')
+parser.add_argument('--output_prediction_dir', dest='output_prediction_dir', default=None, help='output_prediction_dir')
+parser.add_argument('--output_image_dir', dest='output_image_dir', default=None, help='output_image_dir')
+
 # model setting
 parser.add_argument('--batch_size', dest='batch_size', type=int, default=1, help='overall batch size')
 parser.add_argument('--epoch', dest='epoch', type=int, default=300, help='the num of epoch')
@@ -26,7 +31,8 @@ parser.add_argument('--cons_lambda', dest='cons_lambda', type=float, default=10.
 parser.add_argument('--dete_lambda', dest='dete_lambda', type=float, default=5.0)
 parser.add_argument('--beta1', dest='beta1', type=float, default=0.5)
 parser.add_argument('--hidden_dim', dest='hidden_dim', type=int, default=64)
-parser.add_argument('--image_size', dest='image_size', type=int, default=512, help='image_size')
+parser.add_argument('--load_size', dest='load_size', type=int, default=286, help='load_size')
+parser.add_argument('--fine_size', dest='fine_size', type=int, default=256, help='fine_size')
 parser.add_argument('--output_c_dim', dest='output_c_dim', type=int, default=3)
 parser.add_argument('--input_c_dim', dest='input_c_dim', type=int, default=3)
 
@@ -41,8 +47,12 @@ def main(_):
         model = Model(sess, args)
         if args.phase == 'train':
             model.train()
-        else:
+        elif args.phase == 'test':
             model.test()
+        elif args.phase == 'test_input_directly':
+            model.test_input_directly(args)
+        elif args.phase == 'test_only_detection':
+            model.test_only_detection(args)
 
 
 if __name__ == '__main__':
