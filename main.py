@@ -26,6 +26,7 @@ parser.add_argument('--output_image_dir', dest='output_image_dir', default=None,
 parser.add_argument('--batch_size', dest='batch_size', type=int, default=1, help='overall batch size')
 parser.add_argument('--epoch', dest='epoch', type=int, default=300, help='the num of epoch')
 parser.add_argument('--lr_decay_epoch', dest='lr_decay_epoch', type=int, default=150)
+parser.add_argument('--detection_epoch', dest='detection_epoch', type=int, default=150)
 parser.add_argument('--lr', dest='lr', type=float, default=0.0002)
 parser.add_argument('--cons_lambda', dest='cons_lambda', type=float, default=10.0)
 parser.add_argument('--dete_lambda', dest='dete_lambda', type=float, default=5.0)
