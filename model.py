@@ -121,27 +121,27 @@ class Model(object):
             self.DA_fake_A_score = self.D_A(self.fake_A, reuse=False)
             self.DB_fake_B_score = self.D_B(self.fake_B, reuse=False)
 
-            # zero padding
-            fake_B_padding = tf.image.pad_to_bounding_box(
-                self.fake_B, offset_height=0, offset_width=0,
-                target_height=1024, target_width=1024
-            )
-
-            # detection model
-            with tf.variable_scope('student'):
-                self.feature_extractor_fn = FeatureExtractor(is_training=False)
-                self.anchor_generator_fn = AnchorGenerator()
-                self.detector = Detector(fake_B_padding,
-                                         self.feature_extractor_fn, self.anchor_generator_fn)
-
-                with tf.name_scope('student_supervised_loss'):
-                    labels = {'boxes': self.B_boxes, 'num_boxes': self.B_num_boxes}
-                    losses = self.detector.loss(labels, self.detector_params)
-                    self.localization_loss = \
-                        self.detector_params['localization_loss_weight'] * losses['localization_loss']
-                    self.classification_loss = \
-                        self.detector_params['classification_loss_weight'] * losses['classification_loss']
-                    self.detector_loss = self.localization_loss + self.classification_loss
+            # # zero padding
+            # fake_B_padding = tf.image.pad_to_bounding_box(
+            #     self.fake_B, offset_height=0, offset_width=0,
+            #     target_height=1024, target_width=1024
+            # )
+            #
+            # # detection model
+            # with tf.variable_scope('student'):
+            #     self.feature_extractor_fn = FeatureExtractor(is_training=False)
+            #     self.anchor_generator_fn = AnchorGenerator()
+            #     self.detector = Detector(fake_B_padding,
+            #                              self.feature_extractor_fn, self.anchor_generator_fn)
+            #
+            #     with tf.name_scope('student_supervised_loss'):
+            #         labels = {'boxes': self.B_boxes, 'num_boxes': self.B_num_boxes}
+            #         losses = self.detector.loss(labels, self.detector_params)
+            #         self.localization_loss = \
+            #             self.detector_params['localization_loss_weight'] * losses['localization_loss']
+            #         self.classification_loss = \
+            #             self.detector_params['classification_loss_weight'] * losses['classification_loss']
+            #         self.detector_loss = self.localization_loss + self.classification_loss
 
             # loss for generator
             self.loss_A_cyc = abs_criterion(self.real_A, self.fake_A_return)
@@ -149,7 +149,7 @@ class Model(object):
             self.G_loss = self.criterionGAN(self.DA_fake_A_score, tf.ones_like(self.DA_fake_A_score)) \
                           + self.criterionGAN(self.DB_fake_B_score, tf.ones_like(self.DB_fake_B_score)) \
                           + self.cons_lambda * (self.loss_A_cyc + self.loss_B_cyc)
-            self.G_loss_with_detection = self.G_loss + self.dete_lambda * self.detector_loss
+            # self.G_loss_with_detection = self.G_loss + self.dete_lambda * self.detector_loss
             # ---- network to update generator ------
 
             # ---- network to update discriminator ------
@@ -172,12 +172,12 @@ class Model(object):
         # summary for loss
         self.loss_A_cyc_sum = tf.summary.scalar("loss_A_cyc", self.loss_A_cyc)
         self.loss_B_cyc_sum = tf.summary.scalar("loss_B_cyc", self.loss_B_cyc)
-        self.detector_loss_sum = tf.summary.scalar("detector_loss", self.detector_loss)
+        # self.detector_loss_sum = tf.summary.scalar("detector_loss", self.detector_loss)
         self.G_loss_sum = tf.summary.scalar("G_loss", self.G_loss)
-        self.G_loss_with_detection_sum = tf.summary.scalar("G_loss_with_detection", self.G_loss_with_detection)
+        # self.G_loss_with_detection_sum = tf.summary.scalar("G_loss_with_detection", self.G_loss_with_detection)
         self.G_sum = tf.summary.merge([self.loss_A_cyc_sum, self.loss_B_cyc_sum, self.G_loss_sum])
-        self.G_with_detection_sum = tf.summary.merge([self.loss_A_cyc_sum, self.loss_B_cyc_sum,
-                                                      self.G_loss_with_detection_sum])
+        # self.G_with_detection_sum = tf.summary.merge([self.loss_A_cyc_sum, self.loss_B_cyc_sum,
+        #                                               self.G_loss_with_detection_sum])
         self.DA_loss_sum = tf.summary.scalar("DA_loss", self.DA_loss)
         self.DB_loss_sum = tf.summary.scalar("DB_loss", self.DB_loss)
         self.D_loss_sum = tf.summary.scalar("D_loss", self.D_loss)
@@ -205,8 +205,8 @@ class Model(object):
         self.lr_ph = tf.placeholder(tf.float32, name='learning_rate')
         self.D_optim = tf.train.AdamOptimizer(self.lr_ph, beta1=self.beta1).minimize(self.D_loss, var_list=self.d_vars)
         self.G_optim = tf.train.AdamOptimizer(self.lr_ph, beta1=self.beta1).minimize(self.G_loss, var_list=self.g_vars)
-        self.G_detector_optim = tf.train.AdamOptimizer(self.lr_ph, beta1=self.beta1) \
-            .minimize(self.G_loss_with_detection, var_list=self.g_vars)
+        # self.G_detector_optim = tf.train.AdamOptimizer(self.lr_ph, beta1=self.beta1) \
+        #     .minimize(self.G_loss_with_detection, var_list=self.g_vars)
 
     def _test_model(self):
         # placeholder
@@ -296,10 +296,10 @@ class Model(object):
         self.s_vars = tf.global_variables(scope='student')
 
     def train(self):
-        if self.load_detector():
-            print(" [*] Load SUCCESS")
-        else:
-            print(" [!] Load failed...")
+        # if self.load_detector():
+        #     print(" [*] Load SUCCESS")
+        # else:
+        #     print(" [!] Load failed...")
 
         A_init_op, A_next_el, A_file_num = self.get_input_fn(self.train_A_path, is_training=True)
         B_init_op, B_next_el, B_file_num = self.get_input_fn(self.train_B_path, is_training=True)
@@ -329,22 +329,22 @@ class Model(object):
                         A_image, A_img_shape, A_boxes, A_num_boxes, A_filename = self.sess.run(A_next_el)
                         B_image, B_img_shape, B_boxes, B_num_boxes, B_filename = self.sess.run(B_next_el)
 
-                        if epoch < self.detection_epoch:
-                            # update G
-                            fake_A_sample, fake_B_sample, _, G_sum = \
-                                self.sess.run([self.fake_A, self.fake_B, self.G_optim, self.G_sum],
-                                              feed_dict={self.real_A: A_image, self.real_B: B_image, self.lr_ph: lr})
-                            self.writer.add_summary(G_sum, counter)
-                        else:
-                            fake_A_sample, fake_B_sample, _, G_with_detection_sum = \
-                                self.sess.run([self.fake_A, self.fake_B,
-                                               self.G_detector_optim, self.G_with_detection_sum],
-                                              feed_dict={self.real_A: A_image,
-                                                         self.real_B: B_image,
-                                                         self.B_boxes: B_boxes,
-                                                         self.B_num_boxes: B_num_boxes,
-                                                         self.lr_ph: lr})
-                            self.writer.add_summary(G_with_detection_sum, counter)
+                        # if epoch < self.detection_epoch:
+                        # update G
+                        fake_A_sample, fake_B_sample, _, G_sum = \
+                            self.sess.run([self.fake_A, self.fake_B, self.G_optim, self.G_sum],
+                                          feed_dict={self.real_A: A_image, self.real_B: B_image, self.lr_ph: lr})
+                        self.writer.add_summary(G_sum, counter)
+                        # else:
+                        # fake_A_sample, fake_B_sample, _, G_with_detection_sum = \
+                        #     self.sess.run([self.fake_A, self.fake_B,
+                        #                    self.G_detector_optim, self.G_with_detection_sum],
+                        #                   feed_dict={self.real_A: A_image,
+                        #                              self.real_B: B_image,
+                        #                              self.B_boxes: B_boxes,
+                        #                              self.B_num_boxes: B_num_boxes,
+                        #                              self.lr_ph: lr})
+                        # self.writer.add_summary(G_with_detection_sum, counter)
 
                         # update D
                         _, D_sum = self.sess.run([self.D_optim, self.D_sum],
