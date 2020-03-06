@@ -80,8 +80,8 @@ class generator_resnet_256:
             # Justin Johnson's model from https://github.com/jcjohnson/fast-neural-style/
             # The network with 9 blocks consists of: c7s1-32, d64, d128, R128, R128, R128,
             # R128, R128, R128, R128, R128, R128, u64, u32, c7s1-3
-            c0 = tf.pad(input, [[0, 0], [3, 3], [3, 3], [0, 0]], "REFLECT")
-            c1 = tf.nn.relu(instance_norm(conv2d(c0, self.hidden_dim, 7, 1, padding='VALID', name='g_e1_c'), 'g_e1_bn'))
+            c0 = tf.pad(input, [[0, 0], [1, 1], [1, 1], [0, 0]], "REFLECT")
+            c1 = tf.nn.relu(instance_norm(conv2d(c0, self.hidden_dim, 3, 1, padding='VALID', name='g_e1_c'), 'g_e1_bn'))
             c2 = tf.nn.relu(instance_norm(conv2d(c1, self.hidden_dim * 2, 3, 2, name='g_e2_c'), 'g_e2_bn'))
             c3 = tf.nn.relu(instance_norm(conv2d(c2, self.hidden_dim * 4, 3, 2, name='g_e3_c'), 'g_e3_bn'))
             # define G network with 9 resnet blocks
@@ -99,8 +99,8 @@ class generator_resnet_256:
             d1 = tf.nn.relu(instance_norm(d1, 'g_d1_bn'))
             d2 = deconv2d(d1, self.hidden_dim, 3, 2, name='g_d2_dc')
             d2 = tf.nn.relu(instance_norm(d2, 'g_d2_bn'))
-            d2 = tf.pad(d2, [[0, 0], [3, 3], [3, 3], [0, 0]], "REFLECT")
-            pred = tf.nn.tanh(conv2d(d2, self.output_c_dim, 7, 1, padding='VALID', name='g_pred_c'))
+            d2 = tf.pad(d2, [[0, 0], [1, 1], [1, 1], [0, 0]], "REFLECT")
+            pred = tf.nn.tanh(conv2d(d2, self.output_c_dim, 3, 1, padding='VALID', name='g_pred_c'))
 
             return pred
 

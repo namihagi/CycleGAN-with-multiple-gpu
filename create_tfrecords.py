@@ -31,8 +31,8 @@ def dict_to_tf_example(npy_path):
 
 
 def main():
-    npy_dir = './datasets/ffhq-npy'
-    output_dir = './datasets/ffhq-npy-tfrecords'
+    npy_dir = '../pretrain_for_detection/test/ball_disk020_resnet_vggcentering/features/test'
+    output_dir = './datasets/ball-web-disk020-features/test'
 
     print('Reading npys from:', npy_dir)
     examples_list = glob(os.path.join(npy_dir, '*.npy'))

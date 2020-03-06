@@ -11,3 +11,4 @@ ckpt_for_detector/*
 .idea/*
 create_tfrecords_with_annotations.sh
 train_and_test.sh
+detect_from_image.sh
