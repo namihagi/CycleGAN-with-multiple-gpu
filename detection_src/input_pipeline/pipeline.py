@@ -1,9 +1,6 @@
 import tensorflow as tf
 
-from detection_src.constants import SHUFFLE_BUFFER_SIZE, NUM_THREADS, RESIZE_METHOD
-from detection_src.input_pipeline.random_image_crop import random_image_crop
-from detection_src.input_pipeline.other_augmentations import random_color_manipulations, \
-    random_flip_left_right, random_pixel_value_scale, random_jitter_boxes
+from detection_src.constants import NUM_THREADS
 
 
 class Pipeline:
@@ -36,12 +33,10 @@ class Pipeline:
         dataset = dataset.flat_map(tf.data.TFRecordDataset)
         dataset = dataset.prefetch(buffer_size=batch_size * 2)
 
-        # if shuffle:
-        #     dataset = dataset.shuffle(buffer_size=SHUFFLE_BUFFER_SIZE)
         dataset = dataset.map(self._parse_and_preprocess, num_parallel_calls=NUM_THREADS)
 
         # we need batches of fixed size
-        padded_shapes = ([self.fine_size, self.fine_size, 3], [3], [None, 4], [], [])
+        padded_shapes = ([self.fine_size, self.fine_size, 3], [])
         dataset = dataset.padded_batch(batch_size, padded_shapes, drop_remainder=True)
         dataset = dataset.prefetch(buffer_size=1)
 
@@ -70,12 +65,7 @@ class Pipeline:
         """
         features = {
             'filename': tf.FixedLenFeature([], tf.string),
-            'img_shape': tf.FixedLenFeature([3], tf.int64),
-            'image': tf.FixedLenFeature([], tf.string),
-            'ymin': tf.FixedLenSequenceFeature([], tf.float32, allow_missing=True),
-            'xmin': tf.FixedLenSequenceFeature([], tf.float32, allow_missing=True),
-            'ymax': tf.FixedLenSequenceFeature([], tf.float32, allow_missing=True),
-            'xmax': tf.FixedLenSequenceFeature([], tf.float32, allow_missing=True),
+            'image': tf.FixedLenFeature([], tf.string)
         }
         parsed_features = tf.parse_single_example(example_proto, features)
 
@@ -84,31 +74,13 @@ class Pipeline:
         image = tf.image.convert_image_dtype(image, tf.float32)
         # now pixel values are scaled to [0, 1] range
 
-        # get ground truth boxes, they must be in from-zero-to-one format
-        boxes = tf.stack([
-            parsed_features['ymin'], parsed_features['xmin'],
-            parsed_features['ymax'], parsed_features['xmax']
-        ], axis=1)
-        boxes = tf.to_float(boxes)
-        # it is important to clip here!
-        boxes = tf.clip_by_value(boxes, clip_value_min=0.0, clip_value_max=1.0)
-
         if self.is_training:
-            image, boxes = random_image_crop(
-                image, boxes, probability=0.9,
-                min_object_covered=0.9,
-                aspect_ratio_range=(0.93, 1.07),
-                area_range=(0.4, 0.9),
-                overlap_thresh=0.4
-            )
-            image = tf.image.resize_images(image, size=[self.fine_size, self.fine_size])
+            image = tf.image.resize_images(image, size=[self.load_size, self.load_size])
+            image = tf.image.random_crop(image, size=[self.fine_size, self.fine_size, 3])
         else:
             image = tf.image.resize_images(image, size=[self.fine_size, self.fine_size])
-        image = tf.clip_by_value(image, clip_value_min=0.0, clip_value_max=1.0)
         image = (image * 2.0) - 1.0
         # now pixel values are scaled to [-1, 1] range
 
-        img_shape = tf.to_int32(parsed_features['img_shape'])
-        num_boxes = tf.to_int32(tf.shape(boxes)[0])
         filename = parsed_features['filename']
-        return image, img_shape, boxes, num_boxes, filename
+        return image, filename

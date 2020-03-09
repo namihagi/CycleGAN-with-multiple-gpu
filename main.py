@@ -14,19 +14,20 @@ parser.add_argument('--train_A_path', dest='train_A_path', default=None, help='t
 parser.add_argument('--train_B_path', dest='train_B_path', default=None, help='train_B_path')
 parser.add_argument('--test_A_path', dest='test_A_path', default=None, help='test_A_path')
 parser.add_argument('--test_B_path', dest='test_B_path', default=None, help='test_B_path')
-parser.add_argument('--class_name', dest='class_name', default=None, help='class name for test')
 parser.add_argument('--sub_dir', dest='sub_dir', default=None, help='sub directory name')
 
 # test detection dir
 parser.add_argument('--input_dir', dest='input_dir', default=None, help='input_dir')
 parser.add_argument('--output_prediction_dir', dest='output_prediction_dir', default=None, help='output_prediction_dir')
 parser.add_argument('--output_image_dir', dest='output_image_dir', default=None, help='output_image_dir')
+parser.add_argument('--class_name', dest='class_name', default=None, help='class name for test')
 
 # model setting
 parser.add_argument('--batch_size', dest='batch_size', type=int, default=1, help='overall batch size')
 parser.add_argument('--epoch', dest='epoch', type=int, default=300, help='the num of epoch')
 parser.add_argument('--lr_decay_epoch', dest='lr_decay_epoch', type=int, default=150)
 parser.add_argument('--detection_epoch', dest='detection_epoch', type=int, default=150)
+parser.add_argument('--max_itr_per_epoch', dest='max_itr_per_epoch', type=int, default=3000)
 parser.add_argument('--lr', dest='lr', type=float, default=0.0002)
 parser.add_argument('--cons_lambda', dest='cons_lambda', type=float, default=10.0)
 parser.add_argument('--dete_lambda', dest='dete_lambda', type=float, default=5.0)
@@ -50,10 +51,6 @@ def main(_):
             model.train()
         elif args.phase == 'test':
             model.test()
-        elif args.phase == 'test_input_directly':
-            model.test_input_directly(args)
-        elif args.phase == 'test_only_detection':
-            model.test_only_detection(args)
 
 
 if __name__ == '__main__':

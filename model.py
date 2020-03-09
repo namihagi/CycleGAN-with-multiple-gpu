@@ -20,6 +20,7 @@ class Model(object):
         # model setting
         self.batch_size = args.batch_size
         self.epoch = args.epoch
+        self.max_itr_per_epoch = args.max_itr_per_epoch
         self.lr_decay_epoch = args.lr_decay_epoch
         self.detection_epoch = args.detection_epoch
         self.lr = args.lr
@@ -39,20 +40,7 @@ class Model(object):
                                           output_c_dim=self.output_c_dim, name='generatorB2A')
         self.D_A = discriminator_256(hidden_dim=64, name='discriminatorA')
         self.D_B = discriminator_256(hidden_dim=64, name='discriminatorB')
-        # self.G_A2B = generator_resnet(hidden_dim=self.hidden_dim, output_c_dim=self.output_c_dim, name='generatorA2B')
-        # self.G_B2A = generator_resnet(hidden_dim=self.hidden_dim, output_c_dim=self.output_c_dim, name='generatorB2A')
-        # self.D_A = discriminator(hidden_dim=64, name='discriminatorA')
-        # self.D_B = discriminator(hidden_dim=64, name='discriminatorB')
         self.criterionGAN = mae_criterion
-        self.detector_params = {
-            "weight_decay": 1e-3,
-            "score_threshold": 0.3, "iou_threshold": 0.3, "max_boxes": 200,
-            "localization_loss_weight": 1.0, "classification_loss_weight": 1.0,
-            "loss_to_use": "classification",
-            "loc_loss_weight": 0.0, "cls_loss_weight": 1.0,
-            "num_hard_examples": 500, "nms_threshold": 0.99,
-            "max_negatives_per_positive": 3.0, "min_negatives_per_image": 30,
-        }
 
         # directory setting
         self.train_A_path = args.train_A_path
@@ -77,10 +65,6 @@ class Model(object):
                 self.get_input_fn(self.test_B_path, is_training=False)
             # get num of iteration
             self.test_max_iter = min(self.A_test_file_num, self.B_test_file_num, 10) // self.batch_size
-        elif args.phase == 'input_directly':
-            self._input_directly_model()
-        elif args.phase == 'test_only_detection':
-            self._detection_only_model()
         else:
             self._test_model()
         self.saver = tf.train.Saver()
@@ -98,8 +82,6 @@ class Model(object):
         self.real_B = tf.placeholder(tf.float32,
                                      [self.batch_size, self.fine_size, self.fine_size, self.input_c_dim],
                                      name="real_B")
-        self.B_boxes = tf.placeholder(tf.float32, [self.batch_size, None, 4], name="boxes_B")
-        self.B_num_boxes = tf.placeholder(tf.int32, [self.batch_size], name="num_boxes_B")
 
         self.fake_A_sample = tf.placeholder(tf.float32,
                                             [self.batch_size, self.fine_size, self.fine_size, self.input_c_dim],
@@ -121,35 +103,12 @@ class Model(object):
             self.DA_fake_A_score = self.D_A(self.fake_A, reuse=False)
             self.DB_fake_B_score = self.D_B(self.fake_B, reuse=False)
 
-            # # zero padding
-            # fake_B_padding = tf.image.pad_to_bounding_box(
-            #     self.fake_B, offset_height=0, offset_width=0,
-            #     target_height=1024, target_width=1024
-            # )
-            #
-            # # detection model
-            # with tf.variable_scope('student'):
-            #     self.feature_extractor_fn = FeatureExtractor(is_training=False)
-            #     self.anchor_generator_fn = AnchorGenerator()
-            #     self.detector = Detector(fake_B_padding,
-            #                              self.feature_extractor_fn, self.anchor_generator_fn)
-            #
-            #     with tf.name_scope('student_supervised_loss'):
-            #         labels = {'boxes': self.B_boxes, 'num_boxes': self.B_num_boxes}
-            #         losses = self.detector.loss(labels, self.detector_params)
-            #         self.localization_loss = \
-            #             self.detector_params['localization_loss_weight'] * losses['localization_loss']
-            #         self.classification_loss = \
-            #             self.detector_params['classification_loss_weight'] * losses['classification_loss']
-            #         self.detector_loss = self.localization_loss + self.classification_loss
-
             # loss for generator
             self.loss_A_cyc = abs_criterion(self.real_A, self.fake_A_return)
             self.loss_B_cyc = abs_criterion(self.real_B, self.fake_B_return)
             self.G_loss = self.criterionGAN(self.DA_fake_A_score, tf.ones_like(self.DA_fake_A_score)) \
                           + self.criterionGAN(self.DB_fake_B_score, tf.ones_like(self.DB_fake_B_score)) \
                           + self.cons_lambda * (self.loss_A_cyc + self.loss_B_cyc)
-            # self.G_loss_with_detection = self.G_loss + self.dete_lambda * self.detector_loss
             # ---- network to update generator ------
 
             # ---- network to update discriminator ------
@@ -172,12 +131,8 @@ class Model(object):
         # summary for loss
         self.loss_A_cyc_sum = tf.summary.scalar("loss_A_cyc", self.loss_A_cyc)
         self.loss_B_cyc_sum = tf.summary.scalar("loss_B_cyc", self.loss_B_cyc)
-        # self.detector_loss_sum = tf.summary.scalar("detector_loss", self.detector_loss)
         self.G_loss_sum = tf.summary.scalar("G_loss", self.G_loss)
-        # self.G_loss_with_detection_sum = tf.summary.scalar("G_loss_with_detection", self.G_loss_with_detection)
         self.G_sum = tf.summary.merge([self.loss_A_cyc_sum, self.loss_B_cyc_sum, self.G_loss_sum])
-        # self.G_with_detection_sum = tf.summary.merge([self.loss_A_cyc_sum, self.loss_B_cyc_sum,
-        #                                               self.G_loss_with_detection_sum])
         self.DA_loss_sum = tf.summary.scalar("DA_loss", self.DA_loss)
         self.DB_loss_sum = tf.summary.scalar("DB_loss", self.DB_loss)
         self.D_loss_sum = tf.summary.scalar("D_loss", self.D_loss)
@@ -195,18 +150,11 @@ class Model(object):
         for var in self.d_vars:
             print(var.name)
         print('----- d_vars -----')
-        self.s_vars = tf.global_variables(scope='student')
-        print('----- s_vars -----')
-        for var in self.s_vars:
-            print(var.name)
-        print('----- s_vars -----')
 
         # optimizer
         self.lr_ph = tf.placeholder(tf.float32, name='learning_rate')
         self.D_optim = tf.train.AdamOptimizer(self.lr_ph, beta1=self.beta1).minimize(self.D_loss, var_list=self.d_vars)
         self.G_optim = tf.train.AdamOptimizer(self.lr_ph, beta1=self.beta1).minimize(self.G_loss, var_list=self.g_vars)
-        # self.G_detector_optim = tf.train.AdamOptimizer(self.lr_ph, beta1=self.beta1) \
-        #     .minimize(self.G_loss_with_detection, var_list=self.g_vars)
 
     def _test_model(self):
         # placeholder
@@ -218,94 +166,16 @@ class Model(object):
         self.fake_B = self.G_A2B(self.real_A, reuse=False)
         self.fake_A = self.G_B2A(self.real_B, reuse=False)
 
-        # zero padding
-        fake_B_padding = tf.image.pad_to_bounding_box(
-            self.fake_B, offset_height=0, offset_width=0,
-            target_height=1024, target_width=1024
-        )
-
-        with tf.variable_scope('student'):
-            self.feature_extractor_fn = FeatureExtractor(is_training=False)
-            self.anchor_generator_fn = AnchorGenerator()
-            self.detector = Detector(fake_B_padding, self.feature_extractor_fn, self.anchor_generator_fn)
-
-            with tf.name_scope('student_prediction'):
-                self.prediction = self.detector.get_predictions(
-                    score_threshold=0.5,
-                    iou_threshold=0.5,
-                    max_boxes=200
-                )
-
         # get variables
         self.t_vars = tf.trainable_variables()
         self.g_vars = [var for var in self.t_vars if 'generator' in var.name]
-        self.s_vars = tf.global_variables(scope='student')
-
-    def _input_directly_model(self):
-        self.real_A = tf.placeholder(tf.float32, [self.batch_size, self.fine_size, self.fine_size, self.input_c_dim])
-
-        self.fake_B = self.G_A2B(self.real_A, reuse=False)
-
-        # zero padding
-        fake_B_padding = tf.image.pad_to_bounding_box(
-            self.fake_B, offset_height=0, offset_width=0,
-            target_height=1024, target_width=1024
-        )
-
-        # detection model
-        with tf.variable_scope('student'):
-            self.feature_extractor_fn = FeatureExtractor(is_training=False)
-            self.anchor_generator_fn = AnchorGenerator()
-            self.detector = Detector(fake_B_padding, self.feature_extractor_fn, self.anchor_generator_fn)
-
-            with tf.name_scope('student_prediction'):
-                self.prediction = self.detector.get_predictions(
-                    score_threshold=0.5,
-                    iou_threshold=0.5,
-                    max_boxes=200
-                )
-
-        # get variables
-        self.t_vars = tf.trainable_variables()
-        self.g_vars = [var for var in self.t_vars if 'generator' in var.name]
-        self.s_vars = tf.global_variables(scope='student')
-
-    def _detection_only_model(self):
-        self.real_A = tf.placeholder(tf.float32, [self.batch_size, self.fine_size, self.fine_size, self.input_c_dim])
-
-        # zero padding
-        real_A_padding = tf.image.pad_to_bounding_box(
-            self.real_A, offset_height=0, offset_width=0,
-            target_height=1024, target_width=1024
-        )
-
-        # detection model
-        with tf.variable_scope('student'):
-            self.feature_extractor_fn = FeatureExtractor(is_training=False)
-            self.anchor_generator_fn = AnchorGenerator()
-            self.detector = Detector(real_A_padding, self.feature_extractor_fn, self.anchor_generator_fn)
-
-            with tf.name_scope('student_prediction'):
-                self.prediction = self.detector.get_predictions(
-                    score_threshold=0.8,
-                    iou_threshold=0.8,
-                    max_boxes=200
-                )
-
-        # get variables
-        self.s_vars = tf.global_variables(scope='student')
 
     def train(self):
-        # if self.load_detector():
-        #     print(" [*] Load SUCCESS")
-        # else:
-        #     print(" [!] Load failed...")
-
         A_init_op, A_next_el, A_file_num = self.get_input_fn(self.train_A_path, is_training=True)
         B_init_op, B_next_el, B_file_num = self.get_input_fn(self.train_B_path, is_training=True)
 
         # get num of iteration
-        max_iter = min(A_file_num, B_file_num) // self.batch_size
+        max_iter = min(A_file_num, B_file_num, self.max_itr_per_epoch) // self.batch_size
 
         # training loop
         counter = 0
@@ -326,25 +196,14 @@ class Model(object):
                         bar_iter.set_description('iteration')
 
                         # load data
-                        A_image, A_img_shape, A_boxes, A_num_boxes, A_filename = self.sess.run(A_next_el)
-                        B_image, B_img_shape, B_boxes, B_num_boxes, B_filename = self.sess.run(B_next_el)
+                        A_image, A_filename = self.sess.run(A_next_el)
+                        B_image, B_filename = self.sess.run(B_next_el)
 
-                        # if epoch < self.detection_epoch:
                         # update G
                         fake_A_sample, fake_B_sample, _, G_sum = \
                             self.sess.run([self.fake_A, self.fake_B, self.G_optim, self.G_sum],
                                           feed_dict={self.real_A: A_image, self.real_B: B_image, self.lr_ph: lr})
                         self.writer.add_summary(G_sum, counter)
-                        # else:
-                        # fake_A_sample, fake_B_sample, _, G_with_detection_sum = \
-                        #     self.sess.run([self.fake_A, self.fake_B,
-                        #                    self.G_detector_optim, self.G_with_detection_sum],
-                        #                   feed_dict={self.real_A: A_image,
-                        #                              self.real_B: B_image,
-                        #                              self.B_boxes: B_boxes,
-                        #                              self.B_num_boxes: B_num_boxes,
-                        #                              self.lr_ph: lr})
-                        # self.writer.add_summary(G_with_detection_sum, counter)
 
                         # update D
                         _, D_sum = self.sess.run([self.D_optim, self.D_sum],
@@ -371,8 +230,8 @@ class Model(object):
 
         for idx in range(self.test_max_iter):
             # load data
-            A_image, A_img_shape, A_boxes, A_num_boxes, A_filename = self.sess.run(self.A_test_next_el)
-            B_image, B_img_shape, B_boxes, B_num_boxes, B_filename = self.sess.run(self.B_test_next_el)
+            A_image, A_filename = self.sess.run(self.A_test_next_el)
+            B_image, B_filename = self.sess.run(self.B_test_next_el)
             fake_A, fake_B = self.sess.run([self.fake_A, self.fake_B],
                                            feed_dict={self.real_A: A_image, self.real_B: B_image})
 
@@ -384,14 +243,14 @@ class Model(object):
             A_filename = A_filename[0].decode()
             B_filename = B_filename[0].decode()
 
-            fake_A_size = B_img_shape[0].tolist()
+            # fake_A_size = B_img_shape[0].tolist()
             save_fake_A = Image.fromarray(fake_A[0], mode='RGB')
-            save_fake_A = save_fake_A.resize((int(fake_A_size[1]), int(fake_A_size[0])))
+            # save_fake_A = save_fake_A.resize((int(fake_A_size[1]), int(fake_A_size[0])))
             save_fake_A.save(os.path.join(output_dir, 'B2A_{}'.format(B_filename)))
 
-            fake_B_size = A_img_shape[0].tolist()
+            # fake_B_size = A_img_shape[0].tolist()
             save_fake_B = Image.fromarray(fake_B[0], mode='RGB')
-            save_fake_B = save_fake_B.resize((int(fake_B_size[1]), int(fake_B_size[0])))
+            # save_fake_B = save_fake_B.resize((int(fake_B_size[1]), int(fake_B_size[0])))
             save_fake_B.save(os.path.join(output_dir, 'A2B_{}'.format(A_filename)))
 
     def test(self):
