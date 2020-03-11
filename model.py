@@ -258,15 +258,10 @@ class Model(object):
             print(" [*] Load SUCCESS")
         else:
             print(" [!] Load failed...")
-        if self.load_detector():
-            print(" [*] Load SUCCESS")
-        else:
-            print(" [!] Load failed...")
 
         direction = {
             self.train_A_path: {
                 'image_dir': 'train/A2B',
-                'prediction_dir': 'train/A2B_predictions',
                 'placeholder': self.real_A,
                 'output': self.fake_B,
             },
@@ -277,7 +272,6 @@ class Model(object):
             },
             self.test_A_path: {
                 'image_dir': 'test/A2B',
-                'prediction_dir': 'test/A2B_predictions',
                 'placeholder': self.real_A,
                 'output': self.fake_B
             },
@@ -294,44 +288,20 @@ class Model(object):
             init_op, next_el, file_num = self.get_input_fn(str(target_dir), is_training=self.is_training)
             self.sess.run([init_op])
 
+            output_image_dir = os.path.join(self.result_dir, setting['image_dir'])
+            makedirs(output_image_dir)
+
             for idx in tqdm(range(file_num)):
                 # load data
-                image, img_shape, boxes, num_boxes, filename = self.sess.run(next_el)
-                img_shape = img_shape[0].tolist()
+                image, filename = self.sess.run(next_el)
                 filename = filename[0].decode()
-                if 'prediction_dir' in setting.keys():
-                    if idx == 0:
-                        output_prediction_dir = os.path.join(self.result_dir, setting['prediction_dir'])
-                        makedirs(output_prediction_dir)
-                    output, prediction = self.sess.run([setting['output'], self.prediction],
-                                                       feed_dict={setting['placeholder']: image})
-                    # extract prediction
-                    num_boxes = prediction['num_boxes'][0]
-                    boxes = prediction['boxes'][0][:num_boxes]
-                    scores = prediction['scores'][0][:num_boxes]
 
-                    scaler = np.array([1024, 1024, 1024, 1024], dtype='float32')
-                    boxes = boxes * scaler
-
-                    # output prediction
-                    json_filename = filename.replace('.jpg', '.txt')
-                    h, w, c = img_shape
-                    with open(os.path.join(output_prediction_dir, json_filename), 'w') as fout:
-                        for score, box in zip(scores, boxes):
-                            left, top, right, bottom = float(box[1]), float(box[0]), float(box[3]), float(box[2])
-                            if right > 256 or top > 256:
-                                continue
-                            fout.write('%s %f %d %d %d %d\n'
-                                       % (self.class_name, float(score), int(left), int(top), int(right), int(bottom)))
-                else:
-                    output = self.sess.run(setting['output'],
-                                           feed_dict={setting['placeholder']: image})
+                # get generated image
+                output = self.sess.run(setting['output'], feed_dict={setting['placeholder']: image})
 
                 output = (output + 1.0) / 2.0
                 output = (output * 255).astype(np.uint8)
 
-                output_image_dir = os.path.join(self.result_dir, setting['image_dir'])
-                makedirs(output_image_dir)
                 save_image = Image.fromarray(output[0], mode='RGB')
                 # save_image = save_image.resize((int(img_shape[1]), int(img_shape[0])))
                 save_image.save(os.path.join(output_image_dir, filename))
@@ -506,4 +476,8 @@ class Model(object):
             "test_A_path": self.test_A_path,
             "test_B_path": self.test_B_path
         }
-        json.dump(save_dict, open(os.path.join(self.result_dir, 'config.json'), 'w'))
+        json.dump(
+            save_dict,
+            open(os.path.join(self.result_dir, 'config.json'), 'w'),
+            indent=4
+        )
