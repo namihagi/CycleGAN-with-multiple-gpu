@@ -297,7 +297,8 @@ class Model(object):
         # self.s_vars = tf.global_variables(scope='student')
 
     def train(self):
-        A_init_op, A_next_el, A_file_num = self.get_input_fn(self.train_A_path, is_training=True)
+        A_init_op, A_next_el, A_file_num = self.get_input_fn(self.train_A_path, max_range=self.B_max_range,
+                                                             is_training=True)
         B_init_op, B_next_el, B_file_num = self.get_input_fn(self.train_B_path, max_range=self.B_max_range,
                                                              is_training=True)
 

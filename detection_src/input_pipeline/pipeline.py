@@ -71,10 +71,10 @@ class Pipeline:
         """
         features = {
             'filename': tf.FixedLenFeature([], tf.string),
-            'npy_array': tf.FixedLenSequenceFeature([], tf.float32, allow_missing=True),
+            'feature': tf.FixedLenFeature([], tf.string),
         }
         parsed_features = tf.parse_single_example(example_proto, features)
-        feature_array = tf.to_float(parsed_features['npy_array'])
+        feature_array = tf.decode_raw(parsed_features['feature'], tf.float32)
         feature_array = tf.reshape(feature_array, [self.fine_size, self.fine_size, self.input_c_dim])
 
         if self.max_range != 1.0:
